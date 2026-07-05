@@ -33,6 +33,9 @@ pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
         Mode::Visual { .. } => {
             Span::styled(" [visual] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
         }
+        Mode::Yank => {
+            Span::styled(" [yank] ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
+        }
     };
 
     let section = Span::styled(
@@ -87,6 +90,29 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("Esc/Tab", Style::default().fg(Color::DarkGray)),
             Span::raw(" close"),
         ]),
+
+        Mode::Yank => {
+            let (key_i_label, key_d_label) = match app.section {
+                crate::app::Section::Containers => ("i image", "d ID"),
+                crate::app::Section::Images => ("i ID", "d ID"),
+                crate::app::Section::Volumes => ("i mountpoint", ""),
+                crate::app::Section::Networks => ("i subnet", ""),
+            };
+            let mut spans = vec![
+                Span::raw("  "),
+                Span::styled("y", Style::default().fg(Color::Blue)),
+                Span::raw(" name  "),
+                Span::styled(key_i_label, Style::default().fg(Color::Blue)),
+                Span::raw("  "),
+            ];
+            if !key_d_label.is_empty() {
+                spans.push(Span::styled(key_d_label, Style::default().fg(Color::Blue)));
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled("Esc", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::raw(" cancel"));
+            Line::from(spans)
+        }
 
         Mode::Visual { anchor, cursor } => {
             let lo = anchor.min(cursor);

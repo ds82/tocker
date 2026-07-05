@@ -8,6 +8,7 @@ use futures::StreamExt;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::clipboard;
 use crate::docker::client::SshTunnel;
 use crate::docker::types::{Container, ContainerState, Image, Network, Volume};
 use crate::history::History;
@@ -79,6 +80,7 @@ pub enum Mode {
     Confirm(PendingAction),
     Menu { cursor: usize },
     Visual { anchor: usize, cursor: usize },
+    Yank,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -419,6 +421,7 @@ impl App {
             Mode::Confirm(pending) => self.dispatch_confirm(action, pending),
             Mode::Menu { cursor } => self.dispatch_menu(action, cursor),
             Mode::Visual { anchor, cursor } => self.dispatch_visual(action, anchor, cursor),
+            Mode::Yank => self.dispatch_yank(action),
         }
     }
 
@@ -487,9 +490,56 @@ impl App {
             Action::EnterCommand => self.mode = Mode::Command(String::new()),
             Action::EnterFilter => self.mode = Mode::Filter(String::new()),
             Action::OpenMenu => self.mode = Mode::Menu { cursor: self.section.index() },
+            Action::EnterYank => self.mode = Mode::Yank,
             _ => {}
         }
         Ok(false)
+    }
+
+    fn dispatch_yank(&mut self, action: Action) -> Result<bool> {
+        self.mode = Mode::Normal;
+        let text = match action {
+            Action::Escape => return Ok(false),
+            Action::YankName => self.yank_name(),
+            Action::YankSecondary => self.yank_secondary(),
+            Action::YankId => self.yank_id(),
+            _ => None,
+        };
+        if let Some(text) = text {
+            clipboard::copy(&text);
+            self.status = Some(format!("copied: {text}"));
+        } else if !matches!(action, Action::Escape) {
+            self.status = Some("nothing to yank".into());
+        }
+        Ok(false)
+    }
+
+    fn yank_name(&self) -> Option<String> {
+        match self.section {
+            Section::Containers => self.selected_container().map(|c| c.name.clone()),
+            Section::Images => self.selected_image().map(|i| format!("{}:{}", i.repository, i.tag)),
+            Section::Volumes => self.selected_volume().map(|v| v.name.clone()),
+            Section::Networks => self.selected_network().map(|n| n.name.clone()),
+        }
+    }
+
+    /// Section-specific secondary field: image for containers, ID for images,
+    /// mountpoint for volumes, subnet for networks.
+    fn yank_secondary(&self) -> Option<String> {
+        match self.section {
+            Section::Containers => self.selected_container().map(|c| c.image.clone()),
+            Section::Images => self.selected_image().map(|i| i.id.clone()),
+            Section::Volumes => self.selected_volume().map(|v| v.mountpoint.clone()),
+            Section::Networks => self.selected_network().map(|n| n.subnet.clone()),
+        }
+    }
+
+    fn yank_id(&self) -> Option<String> {
+        match self.section {
+            Section::Containers => self.selected_container().map(|c| c.full_id.clone()),
+            Section::Images => self.selected_image().map(|i| i.id.clone()),
+            _ => None,
+        }
     }
 
     fn dispatch_visual(&mut self, action: Action, anchor: usize, cursor: usize) -> Result<bool> {

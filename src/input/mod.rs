@@ -30,6 +30,10 @@ pub enum Action {
     HistoryNext,
     Exec,
     Visual,
+    EnterYank,
+    YankName,
+    YankSecondary,
+    YankId,
     None,
 }
 
@@ -42,6 +46,7 @@ pub fn map_key(mode: &Mode, key: KeyEvent) -> Action {
         Mode::Confirm(_) => map_confirm(key),
         Mode::Menu { .. } => map_menu(key),
         Mode::Visual { .. } => map_visual(key),
+        Mode::Yank => map_yank(key),
     }
 }
 
@@ -60,6 +65,7 @@ fn map_normal(key: KeyEvent) -> Action {
         (KeyCode::Char('l'), _) | (KeyCode::Enter, _) => Action::OpenLogs,
         (KeyCode::Char('e'), _) => Action::Exec,
         (KeyCode::Char('v'), _) => Action::Visual,
+        (KeyCode::Char('y'), _) => Action::EnterYank,
         (KeyCode::Char('R'), _) => Action::Refresh,
         (KeyCode::Char(':'), _) => Action::EnterCommand,
         (KeyCode::Char('/'), _) => Action::EnterFilter,
@@ -121,6 +127,16 @@ fn map_filter_input(key: KeyEvent) -> Action {
         KeyCode::Backspace => Action::Backspace,
         KeyCode::Char(c) => Action::Char(c),
         _ => Action::None,
+    }
+}
+
+fn map_yank(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::Escape,
+        KeyCode::Char('y') => Action::YankName,      // yy → name
+        KeyCode::Char('i') => Action::YankSecondary, // yi → image / ID / mountpoint / subnet
+        KeyCode::Char('d') => Action::YankId,        // yd → full container/image ID
+        _ => Action::Escape,
     }
 }
 

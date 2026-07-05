@@ -7,6 +7,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
 mod app;
+mod clipboard;
 mod config;
 mod docker;
 mod history;
