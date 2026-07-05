@@ -249,28 +249,30 @@ exec = "e"
 
 ### Phase 1 — Skeleton (MVP)
 
-- [ ] Project scaffold (`cargo new`, dependencies)
-- [ ] `DOCKER_HOST` env var parsing → local socket or SSH via `bollard`
-- [ ] Basic event loop with Ratatui + crossterm
-- [ ] Normal / Command / Filter mode FSM
-- [ ] Container list view with live refresh
-- [ ] Start / stop / remove actions
-- [ ] Log viewer (tail + follow)
+- [x] Project scaffold (`cargo new`, dependencies)
+- [x] `DOCKER_HOST` env var parsing → local socket or SSH via `bollard`
+- [x] Basic event loop with Ratatui + crossterm
+- [x] Normal / Command / Filter mode FSM
+- [x] Container list view with live refresh
+- [x] Start / stop / remove actions
+- [x] Log viewer (tail + follow)
 
 ### Phase 2 — Full Resource Coverage
 
-- [ ] Images view (list, pull, remove, inspect)
-- [ ] Volumes view
-- [ ] Networks view
-- [ ] Sidebar navigation between sections
+- [x] Images view (list, remove)
+- [x] Volumes view
+- [x] Networks view
+- [x] Tab navigation between sections
 
 ### Phase 3 — Power Features
 
-- [ ] Visual mode (multi-select)
-- [ ] Exec into container (spawns a real shell via `pty`)
-- [ ] Fuzzy filter with `/`
-- [ ] Command history (`~/.local/share/tocker/history`)
-- [ ] Config file support
+- [x] Visual mode (multi-select with bulk start/stop/delete)
+- [x] Exec into container (`docker exec -it … sh` via subprocess)
+- [x] Filter with `/` (substring match, clears on Esc)
+- [x] Command history (`~/.local/share/tocker/history`, up/down navigation)
+- [x] Config file (`~/.config/tocker/config.toml` — `refresh_interval_ms`, `default_section`)
+- [x] Async Docker operations — UI never blocks; spinner shows in-flight commands
+- [x] Clipboard yank via OSC 52 (`yy` name, `yi` secondary, `yd` ID)
 
 ### Phase 4 — Polish
 
