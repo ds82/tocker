@@ -1,4 +1,6 @@
-use bollard::models::ContainerSummary;
+use bollard::models::{ContainerSummary, ImageSummary, Network as BollardNetwork, Volume as BollardVolume};
+
+// ── Containers ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct Container {
@@ -21,21 +23,6 @@ pub enum ContainerState {
     Dead,
     Created,
     Unknown(String),
-}
-
-impl ContainerState {
-    #[allow(dead_code)]
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Running => "running",
-            Self::Exited => "exited",
-            Self::Paused => "paused",
-            Self::Restarting => "restarting",
-            Self::Dead => "dead",
-            Self::Created => "created",
-            Self::Unknown(s) => s.as_str(),
-        }
-    }
 }
 
 impl From<&str> for ContainerState {
@@ -82,5 +69,144 @@ impl From<ContainerSummary> for Container {
             .join(" ");
 
         Self { id, full_id, name, image, state, status_text, ports }
+    }
+}
+
+// ── Images ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub id: String,
+    /// Used for the remove API call — "repo:tag" or short ID for dangling images
+    pub remove_key: String,
+    pub repository: String,
+    pub tag: String,
+    pub size: String,
+    pub created: String,
+}
+
+impl From<ImageSummary> for Image {
+    fn from(s: ImageSummary) -> Self {
+        let full_id = s.id;
+        let id: String = full_id
+            .strip_prefix("sha256:")
+            .unwrap_or(&full_id)
+            .chars()
+            .take(12)
+            .collect();
+
+        let first_tag = s.repo_tags.into_iter().next();
+
+        let (repository, tag) = match first_tag.as_deref() {
+            Some("<none>:<none>") | None => ("<none>".into(), "<none>".into()),
+            Some(t) => match t.rsplit_once(':') {
+                Some((repo, tag)) => (repo.to_string(), tag.to_string()),
+                None => (t.to_string(), String::new()),
+            },
+        };
+
+        let remove_key = if repository == "<none>" {
+            id.clone()
+        } else {
+            format!("{repository}:{tag}")
+        };
+
+        Self {
+            id,
+            remove_key,
+            repository,
+            tag,
+            size: format_bytes(s.size),
+            created: format_age(s.created),
+        }
+    }
+}
+
+// ── Volumes ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct Volume {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+    pub scope: String,
+}
+
+impl From<BollardVolume> for Volume {
+    fn from(v: BollardVolume) -> Self {
+        let scope = v
+            .scope
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        Self {
+            name: v.name,
+            driver: v.driver,
+            mountpoint: v.mountpoint,
+            scope,
+        }
+    }
+}
+
+// ── Networks ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct Network {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+    pub subnet: String,
+}
+
+impl From<BollardNetwork> for Network {
+    fn from(n: BollardNetwork) -> Self {
+        let id = n.id.unwrap_or_default();
+        let name = n.name.unwrap_or_default();
+        let driver = n.driver.unwrap_or_default();
+        let scope = n.scope.unwrap_or_default();
+
+        let subnet = n
+            .ipam
+            .and_then(|ipam| ipam.config)
+            .and_then(|cfgs| cfgs.into_iter().next())
+            .and_then(|cfg| cfg.subnet)
+            .unwrap_or_default();
+
+        Self { id, name, driver, scope, subnet }
+    }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+fn format_bytes(bytes: i64) -> String {
+    const KB: i64 = 1024;
+    const MB: i64 = KB * 1024;
+    const GB: i64 = MB * 1024;
+    if bytes >= GB {
+        format!("{:.1}GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1}MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1}KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes}B")
+    }
+}
+
+fn format_age(unix_ts: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let diff = (now - unix_ts).max(0);
+    if diff < 60 {
+        format!("{diff}s")
+    } else if diff < 3600 {
+        format!("{}m", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h", diff / 3600)
+    } else {
+        format!("{}d", diff / 86400)
     }
 }

@@ -60,8 +60,8 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
 
         Mode::Confirm(pending) => {
             let label = match pending {
-                crate::app::PendingAction::Remove(id) => {
-                    format!("remove {}? [y] confirm  [n/Esc] cancel", &id[..12.min(id.len())])
+                crate::app::PendingAction::Remove { display, .. } => {
+                    format!("remove {display}? [y] confirm  [n/Esc] cancel")
                 }
             };
             Line::from(vec![

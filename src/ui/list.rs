@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Constraint, Rect},
+    layout::{Alignment, Constraint, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
@@ -12,33 +12,27 @@ use crate::docker::types::ContainerState;
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     match app.section {
         Section::Containers => render_containers(f, area, app),
-        other => render_placeholder(f, area, other),
+        Section::Images => render_images(f, area, app),
+        Section::Volumes => render_volumes(f, area, app),
+        Section::Networks => render_networks(f, area, app),
     }
 }
+
+// ── Containers ────────────────────────────────────────────────────────────────
 
 fn render_containers(f: &mut Frame, area: Rect, app: &App) {
     let visible = app.visible_containers();
 
-    let header = Row::new(vec![
-        Cell::from("NAME").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("IMAGE").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("STATUS").style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from("PORTS").style(Style::default().add_modifier(Modifier::BOLD)),
-    ])
-    .style(Style::default().fg(Color::DarkGray))
-    .height(1);
+    let header = bold_header(&["NAME", "IMAGE", "STATUS", "PORTS"]);
 
     let rows: Vec<Row> = visible
         .iter()
         .map(|c| {
             let state_style = match c.state {
                 ContainerState::Running => Style::default().fg(Color::Green),
-                ContainerState::Paused | ContainerState::Restarting => {
-                    Style::default().fg(Color::Yellow)
-                }
+                ContainerState::Paused | ContainerState::Restarting => Style::default().fg(Color::Yellow),
                 _ => Style::default().fg(Color::Red),
             };
-
             Row::new(vec![
                 Cell::from(c.name.as_str()),
                 Cell::from(c.image.as_str()),
@@ -48,45 +42,172 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let title = if let Mode::Filter(ref q) = app.mode {
-        if !q.is_empty() {
-            format!(" Containers ({}/{}) ", visible.len(), app.containers.len())
-        } else {
-            format!(" Containers ({}) ", app.containers.len())
-        }
-    } else {
-        format!(" Containers ({}) ", app.containers.len())
-    };
+    let title = section_title("Containers", visible.len(), app.containers.len(), &app.mode);
+
+    let table = Table::new(
+        rows,
+        [Constraint::Length(24), Constraint::Fill(1), Constraint::Length(20), Constraint::Length(22)],
+    )
+    .header(header)
+    .row_highlight_style(highlight_style())
+    .block(panel_block(title));
+
+    render_table(f, area, table, app.selected, visible.is_empty());
+}
+
+// ── Images ────────────────────────────────────────────────────────────────────
+
+fn render_images(f: &mut Frame, area: Rect, app: &App) {
+    let visible = app.visible_images();
+
+    let header = bold_header(&["REPOSITORY", "TAG", "ID", "SIZE", "CREATED"]);
+
+    let rows: Vec<Row> = visible
+        .iter()
+        .map(|img| {
+            Row::new(vec![
+                Cell::from(img.repository.as_str()),
+                Cell::from(img.tag.as_str()),
+                Cell::from(img.id.as_str()).style(Style::default().fg(Color::DarkGray)),
+                Cell::from(img.size.as_str()),
+                Cell::from(img.created.as_str()).style(Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+
+    let title = section_title("Images", visible.len(), app.images.len(), &app.mode);
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Fill(1),
+            Constraint::Length(16),
+            Constraint::Length(14),
+            Constraint::Length(9),
+            Constraint::Length(10),
+        ],
+    )
+    .header(header)
+    .row_highlight_style(highlight_style())
+    .block(panel_block(title));
+
+    render_table(f, area, table, app.selected, visible.is_empty());
+}
+
+// ── Volumes ───────────────────────────────────────────────────────────────────
+
+fn render_volumes(f: &mut Frame, area: Rect, app: &App) {
+    let visible = app.visible_volumes();
+
+    let header = bold_header(&["NAME", "DRIVER", "SCOPE", "MOUNTPOINT"]);
+
+    let rows: Vec<Row> = visible
+        .iter()
+        .map(|v| {
+            Row::new(vec![
+                Cell::from(v.name.as_str()),
+                Cell::from(v.driver.as_str()),
+                Cell::from(v.scope.as_str()).style(Style::default().fg(Color::DarkGray)),
+                Cell::from(v.mountpoint.as_str()).style(Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+
+    let title = section_title("Volumes", visible.len(), app.volumes.len(), &app.mode);
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(32),
+            Constraint::Length(10),
+            Constraint::Length(8),
+            Constraint::Fill(1),
+        ],
+    )
+    .header(header)
+    .row_highlight_style(highlight_style())
+    .block(panel_block(title));
+
+    render_table(f, area, table, app.selected, visible.is_empty());
+}
+
+// ── Networks ──────────────────────────────────────────────────────────────────
+
+fn render_networks(f: &mut Frame, area: Rect, app: &App) {
+    let visible = app.visible_networks();
+
+    let header = bold_header(&["NAME", "DRIVER", "SCOPE", "SUBNET"]);
+
+    let rows: Vec<Row> = visible
+        .iter()
+        .map(|n| {
+            Row::new(vec![
+                Cell::from(n.name.as_str()),
+                Cell::from(n.driver.as_str()),
+                Cell::from(n.scope.as_str()).style(Style::default().fg(Color::DarkGray)),
+                Cell::from(n.subnet.as_str()),
+            ])
+        })
+        .collect();
+
+    let title = section_title("Networks", visible.len(), app.networks.len(), &app.mode);
 
     let table = Table::new(
         rows,
         [
             Constraint::Length(24),
+            Constraint::Length(10),
+            Constraint::Length(8),
             Constraint::Fill(1),
-            Constraint::Length(20),
-            Constraint::Length(22),
         ],
     )
     .header(header)
-    .row_highlight_style(
-        Style::default()
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
+    .row_highlight_style(highlight_style())
+    .block(panel_block(title));
+
+    render_table(f, area, table, app.selected, visible.is_empty());
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+fn bold_header<'a>(cols: &[&'a str]) -> Row<'a> {
+    Row::new(
+        cols.iter()
+            .map(|&c| Cell::from(c).style(Style::default().add_modifier(Modifier::BOLD)))
+            .collect::<Vec<_>>(),
     )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(title),
-    );
+    .style(Style::default().fg(Color::DarkGray))
+    .height(1)
+}
 
+fn highlight_style() -> Style {
+    Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+}
+
+fn panel_block(title: String) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(title)
+}
+
+fn section_title(name: &str, visible: usize, total: usize, mode: &Mode) -> String {
+    if let Mode::Filter(ref q) = mode {
+        if !q.is_empty() {
+            return format!(" {name} ({visible}/{total}) ");
+        }
+    }
+    format!(" {name} ({total}) ")
+}
+
+fn render_table(f: &mut Frame, area: Rect, table: Table, selected: usize, empty: bool) {
     let mut state = TableState::default();
-    state.select(if visible.is_empty() { None } else { Some(app.selected) });
-
+    state.select(if empty { None } else { Some(selected) });
     f.render_stateful_widget(table, area, &mut state);
 }
 
-fn render_placeholder(f: &mut Frame, area: Rect, section: Section) {
+#[allow(dead_code)]
+fn render_empty_hint(f: &mut Frame, area: Rect, section: Section) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -95,20 +216,12 @@ fn render_placeholder(f: &mut Frame, area: Rect, section: Section) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let msg = Line::from(vec![
-        Span::styled(
-            format!("{} — coming in Phase 2", section.label()),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
-
-    // Vertically centre the message
     if inner.height > 2 {
-        let y_offset = inner.height / 2;
-        let msg_area = Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
-        f.render_widget(
-            Paragraph::new(msg).alignment(ratatui::layout::Alignment::Center),
-            msg_area,
-        );
+        let msg = Line::from(Span::styled(
+            format!("no {} found", section.label().to_lowercase()),
+            Style::default().fg(Color::DarkGray),
+        ));
+        let msg_area = Rect::new(inner.x, inner.y + inner.height / 2, inner.width, 1);
+        f.render_widget(Paragraph::new(msg).alignment(Alignment::Center), msg_area);
     }
 }

@@ -59,7 +59,7 @@ where
     let mut docker_tick = interval(Duration::from_secs(2));
     docker_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-    app.refresh_containers().await;
+    app.refresh_current_section().await;
 
     loop {
         terminal.draw(|f| ui::render(f, app))?;
@@ -71,16 +71,19 @@ where
                         if app.handle_key(key).await? {
                             break;
                         }
+                        // Section switch from menu: refresh new section immediately
+                        if app.needs_refresh {
+                            app.needs_refresh = false;
+                            app.refresh_current_section().await;
+                        }
                     }
-                    Some(Ok(Event::Resize(_, _))) => {} // ratatui redraws on next loop
+                    Some(Ok(Event::Resize(_, _))) => {}
                     _ => {}
                 }
             }
             _ = docker_tick.tick() => {
-                if matches!(app.mode, app::Mode::Normal | app::Mode::Filter(_))
-                    && app.section == app::Section::Containers
-                {
-                    app.refresh_containers().await;
+                if matches!(app.mode, app::Mode::Normal | app::Mode::Filter(_)) {
+                    app.refresh_current_section().await;
                 }
             }
             maybe_line = app.recv_log_line() => {

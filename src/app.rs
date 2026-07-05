@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bollard::query_parameters::{
-    ListContainersOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
-    StopContainerOptionsBuilder,
+    ListContainersOptionsBuilder, ListImagesOptionsBuilder, LogsOptionsBuilder,
+    RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, StopContainerOptionsBuilder,
 };
 use bollard::Docker;
 use futures::StreamExt;
@@ -9,8 +9,10 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::docker::client::SshTunnel;
-use crate::docker::types::{Container, ContainerState};
+use crate::docker::types::{Container, ContainerState, Image, Network, Volume};
 use crate::input::{map_key, Action};
+
+// ── Section ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Section {
@@ -56,6 +58,8 @@ impl Section {
     }
 }
 
+// ── Mode ──────────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
     Normal,
@@ -68,16 +72,24 @@ pub enum Mode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PendingAction {
-    Remove(String),
+    Remove { key: String, display: String },
 }
+
+// ── App ───────────────────────────────────────────────────────────────────────
 
 pub struct App {
     pub docker: Arc<Docker>,
     pub _tunnel: Option<SshTunnel>,
     pub mode: Mode,
     pub section: Section,
+    pub needs_refresh: bool,
+    // Section data
     pub containers: Vec<Container>,
+    pub images: Vec<Image>,
+    pub volumes: Vec<Volume>,
+    pub networks: Vec<Network>,
     pub selected: usize,
+    // Log viewer
     pub log_lines: Vec<String>,
     pub status: Option<String>,
     log_rx: Option<mpsc::Receiver<String>>,
@@ -91,7 +103,11 @@ impl App {
             _tunnel: tunnel,
             mode: Mode::Normal,
             section: Section::Containers,
+            needs_refresh: false,
             containers: Vec::new(),
+            images: Vec::new(),
+            volumes: Vec::new(),
+            networks: Vec::new(),
             selected: 0,
             log_lines: Vec::new(),
             status: None,
@@ -100,25 +116,75 @@ impl App {
         }
     }
 
+    // ── Visible item helpers ─────────────────────────────────────────────────
+
     pub fn visible_containers(&self) -> Vec<&Container> {
+        self.filter_list(&self.containers, |c| {
+            format!("{} {}", c.name, c.image)
+        })
+    }
+
+    pub fn visible_images(&self) -> Vec<&Image> {
+        self.filter_list(&self.images, |img| {
+            format!("{}:{}", img.repository, img.tag)
+        })
+    }
+
+    pub fn visible_volumes(&self) -> Vec<&Volume> {
+        self.filter_list(&self.volumes, |v| v.name.clone())
+    }
+
+    pub fn visible_networks(&self) -> Vec<&Network> {
+        self.filter_list(&self.networks, |n| format!("{} {}", n.name, n.driver))
+    }
+
+    fn filter_list<'a, T, F>(&'a self, list: &'a [T], key_fn: F) -> Vec<&'a T>
+    where
+        F: Fn(&T) -> String,
+    {
         if let Mode::Filter(ref q) = self.mode {
             if !q.is_empty() {
                 let q = q.to_lowercase();
-                return self
-                    .containers
-                    .iter()
-                    .filter(|c| {
-                        c.name.to_lowercase().contains(&q)
-                            || c.image.to_lowercase().contains(&q)
-                    })
-                    .collect();
+                return list.iter().filter(|item| key_fn(item).to_lowercase().contains(&q)).collect();
             }
         }
-        self.containers.iter().collect()
+        list.iter().collect()
+    }
+
+    pub fn current_visible_len(&self) -> usize {
+        match self.section {
+            Section::Containers => self.visible_containers().len(),
+            Section::Images => self.visible_images().len(),
+            Section::Volumes => self.visible_volumes().len(),
+            Section::Networks => self.visible_networks().len(),
+        }
     }
 
     pub fn selected_container(&self) -> Option<&Container> {
         self.visible_containers().get(self.selected).copied()
+    }
+
+    pub fn selected_image(&self) -> Option<&Image> {
+        self.visible_images().get(self.selected).copied()
+    }
+
+    pub fn selected_volume(&self) -> Option<&Volume> {
+        self.visible_volumes().get(self.selected).copied()
+    }
+
+    pub fn selected_network(&self) -> Option<&Network> {
+        self.visible_networks().get(self.selected).copied()
+    }
+
+    // ── Refresh ──────────────────────────────────────────────────────────────
+
+    pub async fn refresh_current_section(&mut self) {
+        match self.section {
+            Section::Containers => self.refresh_containers().await,
+            Section::Images => self.refresh_images().await,
+            Section::Volumes => self.refresh_volumes().await,
+            Section::Networks => self.refresh_networks().await,
+        }
     }
 
     pub async fn refresh_containers(&mut self) {
@@ -134,18 +200,64 @@ impl App {
                 self.clamp_selected();
                 self.status = None;
             }
-            Err(e) => self.status = Some(format!("refresh error: {e}")),
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+
+    async fn refresh_images(&mut self) {
+        match self
+            .docker
+            .list_images(Some(
+                ListImagesOptionsBuilder::default().all(false).build(),
+            ))
+            .await
+        {
+            Ok(list) => {
+                self.images = list.into_iter().map(Image::from).collect();
+                self.clamp_selected();
+                self.status = None;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+
+    async fn refresh_volumes(&mut self) {
+        match self.docker.list_volumes(None::<bollard::query_parameters::ListVolumesOptions>).await {
+            Ok(resp) => {
+                self.volumes = resp
+                    .volumes
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Volume::from)
+                    .collect();
+                self.clamp_selected();
+                self.status = None;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+
+    async fn refresh_networks(&mut self) {
+        match self.docker.list_networks(None::<bollard::query_parameters::ListNetworksOptions>).await {
+            Ok(list) => {
+                self.networks = list.into_iter().map(Network::from).collect();
+                self.clamp_selected();
+                self.status = None;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
         }
     }
 
     fn clamp_selected(&mut self) {
-        let len = self.visible_containers().len();
+        let len = self.current_visible_len();
         if len == 0 {
             self.selected = 0;
         } else if self.selected >= len {
             self.selected = len - 1;
         }
     }
+
+    // ── Log streaming ─────────────────────────────────────────────────────────
 
     pub fn start_log_stream(&mut self, full_id: String) {
         let (tx, rx) = mpsc::channel(512);
@@ -175,8 +287,7 @@ impl App {
         self.log_rx = None;
     }
 
-    /// Returns the next log line, or never resolves if no stream is active.
-    /// Designed for use as a tokio::select! arm — effectively disabled when idle.
+    /// Never resolves when no stream is active — safe to use as a select! arm.
     pub async fn recv_log_line(&mut self) -> Option<String> {
         if self.log_rx.is_none() {
             return std::future::pending().await;
@@ -201,6 +312,8 @@ impl App {
         }
     }
 
+    // ── Input dispatch ────────────────────────────────────────────────────────
+
     pub async fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Result<bool> {
         let action = map_key(&self.mode, key);
         self.dispatch(action).await
@@ -218,7 +331,7 @@ impl App {
     }
 
     async fn dispatch_normal(&mut self, action: Action) -> Result<bool> {
-        let len = self.visible_containers().len();
+        let len = self.current_visible_len();
         match action {
             Action::Quit => return Ok(true),
             Action::MoveDown => {
@@ -237,43 +350,66 @@ impl App {
             Action::HalfPageUp => {
                 self.selected = self.selected.saturating_sub(10);
             }
+            Action::Delete => self.begin_delete(),
             Action::ToggleStartStop => {
-                if let Some(c) = self.selected_container().cloned() {
-                    self.toggle_container(c.full_id, c.state).await;
+                if self.section == Section::Containers {
+                    if let Some(c) = self.selected_container().cloned() {
+                        self.toggle_container(c.full_id, c.state).await;
+                    }
                 }
             }
             Action::Restart => {
-                if let Some(c) = self.selected_container().cloned() {
-                    self.restart_container(c.full_id).await;
-                }
-            }
-            Action::Delete => {
-                if let Some(c) = self.selected_container().cloned() {
-                    self.mode = Mode::Confirm(PendingAction::Remove(c.full_id));
+                if self.section == Section::Containers {
+                    if let Some(c) = self.selected_container().cloned() {
+                        self.restart_container(c.full_id).await;
+                    }
                 }
             }
             Action::OpenLogs | Action::Enter => {
-                if let Some(c) = self.selected_container().cloned() {
-                    let full_id = c.full_id.clone();
-                    self.start_log_stream(full_id);
-                    self.mode = Mode::Log { scroll: 0, follow: true };
+                if self.section == Section::Containers {
+                    if let Some(c) = self.selected_container().cloned() {
+                        self.start_log_stream(c.full_id);
+                        self.mode = Mode::Log { scroll: 0, follow: true };
+                    }
                 }
             }
-            Action::Refresh => {
-                self.refresh_containers().await;
-            }
-            Action::EnterCommand => {
-                self.mode = Mode::Command(String::new());
-            }
-            Action::EnterFilter => {
-                self.mode = Mode::Filter(String::new());
-            }
-            Action::OpenMenu => {
-                self.mode = Mode::Menu { cursor: self.section.index() };
-            }
+            Action::Refresh => self.refresh_current_section().await,
+            Action::EnterCommand => self.mode = Mode::Command(String::new()),
+            Action::EnterFilter => self.mode = Mode::Filter(String::new()),
+            Action::OpenMenu => self.mode = Mode::Menu { cursor: self.section.index() },
             _ => {}
         }
         Ok(false)
+    }
+
+    fn begin_delete(&mut self) {
+        match self.section {
+            Section::Containers => {
+                if let Some(c) = self.selected_container() {
+                    let (key, display) = (c.full_id.clone(), c.name.clone());
+                    self.mode = Mode::Confirm(PendingAction::Remove { key, display });
+                }
+            }
+            Section::Images => {
+                if let Some(img) = self.selected_image() {
+                    let display = format!("{}:{}", img.repository, img.tag);
+                    let key = img.remove_key.clone();
+                    self.mode = Mode::Confirm(PendingAction::Remove { key, display });
+                }
+            }
+            Section::Volumes => {
+                if let Some(v) = self.selected_volume() {
+                    let (key, display) = (v.name.clone(), v.name.clone());
+                    self.mode = Mode::Confirm(PendingAction::Remove { key, display });
+                }
+            }
+            Section::Networks => {
+                if let Some(n) = self.selected_network() {
+                    let (key, display) = (n.id.clone(), n.name.clone());
+                    self.mode = Mode::Confirm(PendingAction::Remove { key, display });
+                }
+            }
+        }
     }
 
     fn dispatch_filter(&mut self, action: Action) -> Result<bool> {
@@ -301,9 +437,7 @@ impl App {
 
     async fn dispatch_command(&mut self, action: Action) -> Result<bool> {
         match action {
-            Action::Escape => {
-                self.mode = Mode::Normal;
-            }
+            Action::Escape => self.mode = Mode::Normal,
             Action::Enter => {
                 let cmd = if let Mode::Command(ref s) = self.mode {
                     s.trim().to_string()
@@ -369,8 +503,12 @@ impl App {
         match action {
             Action::Confirm => {
                 self.mode = Mode::Normal;
-                match pending {
-                    PendingAction::Remove(id) => self.remove_container(id).await,
+                let PendingAction::Remove { key, .. } = pending;
+                match self.section {
+                    Section::Containers => self.remove_container(key).await,
+                    Section::Images => self.remove_image(key).await,
+                    Section::Volumes => self.remove_volume(key).await,
+                    Section::Networks => self.remove_network(key).await,
                 }
             }
             Action::Cancel | Action::Escape => {
@@ -399,6 +537,7 @@ impl App {
                 self.mode = Mode::Normal;
                 self.selected = 0;
                 self.status = None;
+                self.needs_refresh = true;
             }
             _ => {}
         }
@@ -409,12 +548,12 @@ impl App {
         let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
         match parts.as_slice() {
             ["q"] | ["quit"] | [":q"] | [":quit"] => return Ok(true),
-            _ => {
-                self.status = Some(format!("unknown command: :{cmd}"));
-            }
+            _ => self.status = Some(format!("unknown command: :{cmd}")),
         }
         Ok(false)
     }
+
+    // ── Docker actions ────────────────────────────────────────────────────────
 
     async fn toggle_container(&mut self, full_id: String, state: ContainerState) {
         let result = if state == ContainerState::Running {
@@ -458,6 +597,44 @@ impl App {
             Ok(_) => {
                 self.status = None;
                 self.refresh_containers().await;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+
+    async fn remove_image(&mut self, key: String) {
+        match self
+            .docker
+            .remove_image(
+                &key,
+                Some(RemoveImageOptionsBuilder::default().force(true).build()),
+                None,
+            )
+            .await
+        {
+            Ok(_) => {
+                self.status = None;
+                self.refresh_images().await;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+
+    async fn remove_volume(&mut self, name: String) {
+        match self.docker.remove_volume(&name, None::<bollard::query_parameters::RemoveVolumeOptions>).await {
+            Ok(_) => {
+                self.status = None;
+                self.refresh_volumes().await;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+
+    async fn remove_network(&mut self, id: String) {
+        match self.docker.remove_network(&id).await {
+            Ok(_) => {
+                self.status = None;
+                self.refresh_networks().await;
             }
             Err(e) => self.status = Some(format!("error: {e}")),
         }
