@@ -1,0 +1,16 @@
+[package]
+name = "tocker"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tocker"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+bollard = "0.21"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+futures = "0.3"

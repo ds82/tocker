@@ -1,0 +1,465 @@
+use anyhow::Result;
+use bollard::query_parameters::{
+    ListContainersOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
+    StopContainerOptionsBuilder,
+};
+use bollard::Docker;
+use futures::StreamExt;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+
+use crate::docker::client::SshTunnel;
+use crate::docker::types::{Container, ContainerState};
+use crate::input::{map_key, Action};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Section {
+    Containers,
+    Images,
+    Volumes,
+    Networks,
+}
+
+impl Section {
+    pub const ALL: [Section; 4] = [
+        Section::Containers,
+        Section::Images,
+        Section::Volumes,
+        Section::Networks,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Containers => "Containers",
+            Self::Images => "Images",
+            Self::Volumes => "Volumes",
+            Self::Networks => "Networks",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Containers => 0,
+            Self::Images => 1,
+            Self::Volumes => 2,
+            Self::Networks => 3,
+        }
+    }
+
+    pub fn from_index(i: usize) -> Self {
+        match i {
+            0 => Self::Containers,
+            1 => Self::Images,
+            2 => Self::Volumes,
+            _ => Self::Networks,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Mode {
+    Normal,
+    Command(String),
+    Filter(String),
+    Log { scroll: usize, follow: bool },
+    Confirm(PendingAction),
+    Menu { cursor: usize },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PendingAction {
+    Remove(String),
+}
+
+pub struct App {
+    pub docker: Arc<Docker>,
+    pub _tunnel: Option<SshTunnel>,
+    pub mode: Mode,
+    pub section: Section,
+    pub containers: Vec<Container>,
+    pub selected: usize,
+    pub log_lines: Vec<String>,
+    pub status: Option<String>,
+    log_rx: Option<mpsc::Receiver<String>>,
+    _log_tx: Option<mpsc::Sender<String>>,
+}
+
+impl App {
+    pub fn new(docker: Docker, tunnel: Option<SshTunnel>) -> Self {
+        Self {
+            docker: Arc::new(docker),
+            _tunnel: tunnel,
+            mode: Mode::Normal,
+            section: Section::Containers,
+            containers: Vec::new(),
+            selected: 0,
+            log_lines: Vec::new(),
+            status: None,
+            log_rx: None,
+            _log_tx: None,
+        }
+    }
+
+    pub fn visible_containers(&self) -> Vec<&Container> {
+        if let Mode::Filter(ref q) = self.mode {
+            if !q.is_empty() {
+                let q = q.to_lowercase();
+                return self
+                    .containers
+                    .iter()
+                    .filter(|c| {
+                        c.name.to_lowercase().contains(&q)
+                            || c.image.to_lowercase().contains(&q)
+                    })
+                    .collect();
+            }
+        }
+        self.containers.iter().collect()
+    }
+
+    pub fn selected_container(&self) -> Option<&Container> {
+        self.visible_containers().get(self.selected).copied()
+    }
+
+    pub async fn refresh_containers(&mut self) {
+        match self
+            .docker
+            .list_containers(Some(
+                ListContainersOptionsBuilder::default().all(true).build(),
+            ))
+            .await
+        {
+            Ok(list) => {
+                self.containers = list.into_iter().map(Container::from).collect();
+                self.clamp_selected();
+                self.status = None;
+            }
+            Err(e) => self.status = Some(format!("refresh error: {e}")),
+        }
+    }
+
+    fn clamp_selected(&mut self) {
+        let len = self.visible_containers().len();
+        if len == 0 {
+            self.selected = 0;
+        } else if self.selected >= len {
+            self.selected = len - 1;
+        }
+    }
+
+    pub fn start_log_stream(&mut self, full_id: String) {
+        let (tx, rx) = mpsc::channel(512);
+        self._log_tx = Some(tx.clone());
+        self.log_rx = Some(rx);
+        self.log_lines.clear();
+
+        let docker = Arc::clone(&self.docker);
+        tokio::spawn(async move {
+            let opts = LogsOptionsBuilder::default()
+                .follow(true)
+                .stdout(true)
+                .stderr(true)
+                .tail("200")
+                .build();
+            let mut stream = docker.logs(&full_id, Some(opts));
+            while let Some(Ok(chunk)) = stream.next().await {
+                if tx.send(chunk.to_string()).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    pub fn stop_log_stream(&mut self) {
+        self._log_tx = None;
+        self.log_rx = None;
+    }
+
+    /// Returns the next log line, or never resolves if no stream is active.
+    /// Designed for use as a tokio::select! arm — effectively disabled when idle.
+    pub async fn recv_log_line(&mut self) -> Option<String> {
+        if self.log_rx.is_none() {
+            return std::future::pending().await;
+        }
+        let line = self.log_rx.as_mut().unwrap().recv().await;
+        if line.is_none() {
+            self.log_rx = None;
+        }
+        line
+    }
+
+    pub fn push_log_line(&mut self, raw: String) {
+        for line in raw.lines() {
+            self.log_lines.push(line.to_string());
+        }
+        if self.log_lines.len() > 5_000 {
+            let excess = self.log_lines.len() - 5_000;
+            self.log_lines.drain(0..excess);
+        }
+        if let Mode::Log { follow: true, scroll } = &mut self.mode {
+            *scroll = self.log_lines.len().saturating_sub(1);
+        }
+    }
+
+    pub async fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Result<bool> {
+        let action = map_key(&self.mode, key);
+        self.dispatch(action).await
+    }
+
+    async fn dispatch(&mut self, action: Action) -> Result<bool> {
+        match self.mode.clone() {
+            Mode::Normal => self.dispatch_normal(action).await,
+            Mode::Filter(_) => self.dispatch_filter(action),
+            Mode::Command(_) => self.dispatch_command(action).await,
+            Mode::Log { .. } => self.dispatch_log(action),
+            Mode::Confirm(pending) => self.dispatch_confirm(action, pending).await,
+            Mode::Menu { cursor } => self.dispatch_menu(action, cursor),
+        }
+    }
+
+    async fn dispatch_normal(&mut self, action: Action) -> Result<bool> {
+        let len = self.visible_containers().len();
+        match action {
+            Action::Quit => return Ok(true),
+            Action::MoveDown => {
+                if len > 0 {
+                    self.selected = (self.selected + 1).min(len - 1);
+                }
+            }
+            Action::MoveUp => {
+                self.selected = self.selected.saturating_sub(1);
+            }
+            Action::Top => self.selected = 0,
+            Action::Bottom => self.selected = len.saturating_sub(1),
+            Action::HalfPageDown => {
+                self.selected = (self.selected + 10).min(len.saturating_sub(1));
+            }
+            Action::HalfPageUp => {
+                self.selected = self.selected.saturating_sub(10);
+            }
+            Action::ToggleStartStop => {
+                if let Some(c) = self.selected_container().cloned() {
+                    self.toggle_container(c.full_id, c.state).await;
+                }
+            }
+            Action::Restart => {
+                if let Some(c) = self.selected_container().cloned() {
+                    self.restart_container(c.full_id).await;
+                }
+            }
+            Action::Delete => {
+                if let Some(c) = self.selected_container().cloned() {
+                    self.mode = Mode::Confirm(PendingAction::Remove(c.full_id));
+                }
+            }
+            Action::OpenLogs | Action::Enter => {
+                if let Some(c) = self.selected_container().cloned() {
+                    let full_id = c.full_id.clone();
+                    self.start_log_stream(full_id);
+                    self.mode = Mode::Log { scroll: 0, follow: true };
+                }
+            }
+            Action::Refresh => {
+                self.refresh_containers().await;
+            }
+            Action::EnterCommand => {
+                self.mode = Mode::Command(String::new());
+            }
+            Action::EnterFilter => {
+                self.mode = Mode::Filter(String::new());
+            }
+            Action::OpenMenu => {
+                self.mode = Mode::Menu { cursor: self.section.index() };
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn dispatch_filter(&mut self, action: Action) -> Result<bool> {
+        match action {
+            Action::Escape | Action::Enter => {
+                self.mode = Mode::Normal;
+                self.selected = 0;
+            }
+            Action::Char(c) => {
+                if let Mode::Filter(ref mut s) = self.mode {
+                    s.push(c);
+                }
+                self.selected = 0;
+            }
+            Action::Backspace => {
+                if let Mode::Filter(ref mut s) = self.mode {
+                    s.pop();
+                }
+                self.selected = 0;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn dispatch_command(&mut self, action: Action) -> Result<bool> {
+        match action {
+            Action::Escape => {
+                self.mode = Mode::Normal;
+            }
+            Action::Enter => {
+                let cmd = if let Mode::Command(ref s) = self.mode {
+                    s.trim().to_string()
+                } else {
+                    String::new()
+                };
+                self.mode = Mode::Normal;
+                return self.execute_command(&cmd).await;
+            }
+            Action::Char(c) => {
+                if let Mode::Command(ref mut s) = self.mode {
+                    s.push(c);
+                }
+            }
+            Action::Backspace => {
+                if let Mode::Command(ref mut s) = self.mode {
+                    s.pop();
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn dispatch_log(&mut self, action: Action) -> Result<bool> {
+        match action {
+            Action::Quit | Action::Escape => {
+                self.stop_log_stream();
+                self.mode = Mode::Normal;
+            }
+            Action::MoveDown => {
+                if let Mode::Log { scroll, follow } = &mut self.mode {
+                    *follow = false;
+                    *scroll = (*scroll + 1).min(self.log_lines.len().saturating_sub(1));
+                }
+            }
+            Action::MoveUp => {
+                if let Mode::Log { scroll, follow } = &mut self.mode {
+                    *follow = false;
+                    *scroll = scroll.saturating_sub(1);
+                }
+            }
+            Action::Bottom => {
+                if let Mode::Log { scroll, follow } = &mut self.mode {
+                    *scroll = self.log_lines.len().saturating_sub(1);
+                    *follow = true;
+                }
+            }
+            Action::ToggleFollow => {
+                if let Mode::Log { follow, scroll } = &mut self.mode {
+                    *follow = !*follow;
+                    if *follow {
+                        *scroll = self.log_lines.len().saturating_sub(1);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn dispatch_confirm(&mut self, action: Action, pending: PendingAction) -> Result<bool> {
+        match action {
+            Action::Confirm => {
+                self.mode = Mode::Normal;
+                match pending {
+                    PendingAction::Remove(id) => self.remove_container(id).await,
+                }
+            }
+            Action::Cancel | Action::Escape => {
+                self.mode = Mode::Normal;
+                self.status = Some("cancelled".into());
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn dispatch_menu(&mut self, action: Action, cursor: usize) -> Result<bool> {
+        let n = Section::ALL.len();
+        match action {
+            Action::Escape | Action::OpenMenu => {
+                self.mode = Mode::Normal;
+            }
+            Action::MoveDown => {
+                self.mode = Mode::Menu { cursor: (cursor + 1) % n };
+            }
+            Action::MoveUp => {
+                self.mode = Mode::Menu { cursor: (cursor + n - 1) % n };
+            }
+            Action::Enter | Action::Confirm => {
+                self.section = Section::from_index(cursor);
+                self.mode = Mode::Normal;
+                self.selected = 0;
+                self.status = None;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn execute_command(&mut self, cmd: &str) -> Result<bool> {
+        let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
+        match parts.as_slice() {
+            ["q"] | ["quit"] | [":q"] | [":quit"] => return Ok(true),
+            _ => {
+                self.status = Some(format!("unknown command: :{cmd}"));
+            }
+        }
+        Ok(false)
+    }
+
+    async fn toggle_container(&mut self, full_id: String, state: ContainerState) {
+        let result = if state == ContainerState::Running {
+            self.docker
+                .stop_container(
+                    &full_id,
+                    Some(StopContainerOptionsBuilder::default().t(10).build()),
+                )
+                .await
+        } else {
+            self.docker.start_container(&full_id, None).await
+        };
+        match result {
+            Ok(_) => {
+                self.status = None;
+                self.refresh_containers().await;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+
+    async fn restart_container(&mut self, full_id: String) {
+        match self.docker.restart_container(&full_id, None).await {
+            Ok(_) => {
+                self.status = None;
+                self.refresh_containers().await;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+
+    async fn remove_container(&mut self, full_id: String) {
+        match self
+            .docker
+            .remove_container(
+                &full_id,
+                Some(RemoveContainerOptionsBuilder::default().force(true).build()),
+            )
+            .await
+        {
+            Ok(_) => {
+                self.status = None;
+                self.refresh_containers().await;
+            }
+            Err(e) => self.status = Some(format!("error: {e}")),
+        }
+    }
+}
