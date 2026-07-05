@@ -7,12 +7,15 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
 mod app;
+mod config;
 mod docker;
+mod history;
 mod input;
 mod ui;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cfg = config::Config::load();
     let (docker, tunnel) = docker::client::connect().await?;
 
     enable_raw_mode()?;
@@ -30,8 +33,9 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = app::App::new(docker, tunnel);
-    let result = run(&mut terminal, &mut app).await;
+    let default_section = app::Section::from_str(&cfg.general.default_section);
+    let mut app = app::App::new(docker, tunnel, default_section);
+    let result = run(&mut terminal, &mut app, cfg.general.refresh_interval_ms).await;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -46,9 +50,10 @@ async fn main() -> Result<()> {
 async fn run<B>(
     terminal: &mut Terminal<B>,
     app: &mut app::App,
+    refresh_interval_ms: u64,
 ) -> Result<()>
 where
-    B: ratatui::backend::Backend,
+    B: ratatui::backend::Backend + std::io::Write,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     use crossterm::event::{Event, EventStream};
@@ -56,7 +61,7 @@ where
     use tokio::time::{interval, Duration, MissedTickBehavior};
 
     let mut events = EventStream::new();
-    let mut docker_tick = interval(Duration::from_secs(2));
+    let mut docker_tick = interval(Duration::from_millis(refresh_interval_ms));
     docker_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     app.refresh_current_section().await;
@@ -71,10 +76,13 @@ where
                         if app.handle_key(key).await? {
                             break;
                         }
-                        // Section switch from menu: refresh new section immediately
                         if app.needs_refresh {
                             app.needs_refresh = false;
                             app.refresh_current_section().await;
+                        }
+                        if let Some(id) = app.pending_exec.take() {
+                            exec_container(&id, terminal).await?;
+                            app.refresh_containers().await;
                         }
                     }
                     Some(Ok(Event::Resize(_, _))) => {}
@@ -82,7 +90,7 @@ where
                 }
             }
             _ = docker_tick.tick() => {
-                if matches!(app.mode, app::Mode::Normal | app::Mode::Filter(_)) {
+                if matches!(app.mode, app::Mode::Normal | app::Mode::Filter(_) | app::Mode::Visual { .. }) {
                     app.refresh_current_section().await;
                 }
             }
@@ -93,6 +101,28 @@ where
             }
         }
     }
+
+    Ok(())
+}
+
+async fn exec_container<B>(id: &str, terminal: &mut Terminal<B>) -> Result<()>
+where
+    B: ratatui::backend::Backend + std::io::Write,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    // Hand over the terminal to docker exec
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+    let _ = tokio::process::Command::new("docker")
+        .args(["exec", "-it", id, "sh"])
+        .status()
+        .await;
+
+    // Restore TUI
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.clear()?;
 
     Ok(())
 }

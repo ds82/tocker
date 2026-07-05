@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, PendingAction};
 
 pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
     let mode_label = match &app.mode {
@@ -27,6 +27,9 @@ pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
         }
         Mode::Menu { .. } => {
             Span::styled(" [menu] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        }
+        Mode::Visual { .. } => {
+            Span::styled(" [visual] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
         }
     };
 
@@ -60,8 +63,11 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
 
         Mode::Confirm(pending) => {
             let label = match pending {
-                crate::app::PendingAction::Remove { display, .. } => {
+                PendingAction::Remove { display, .. } => {
                     format!("remove {display}? [y] confirm  [n/Esc] cancel")
+                }
+                PendingAction::BulkRemoveContainers { count, .. } => {
+                    format!("remove {count} containers? [y] confirm  [n/Esc] cancel")
                 }
             };
             Line::from(vec![
@@ -80,6 +86,25 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
             Span::raw(" close"),
         ]),
 
+        Mode::Visual { anchor, cursor } => {
+            let lo = anchor.min(cursor);
+            let hi = anchor.max(cursor);
+            let count = hi - lo + 1;
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{count} selected"), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::raw("  "),
+                Span::styled("j/k", Style::default().fg(Color::Magenta)),
+                Span::raw(" extend  "),
+                Span::styled("d", Style::default().fg(Color::Red)),
+                Span::raw(" delete  "),
+                Span::styled("s", Style::default().fg(Color::Green)),
+                Span::raw(" start/stop  "),
+                Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+                Span::raw(" cancel"),
+            ])
+        }
+
         _ => {
             if let Some(ref msg) = app.status {
                 Line::from(Span::styled(
@@ -89,6 +114,10 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
             } else {
                 Line::from(vec![
                     Span::raw("  "),
+                    Span::styled("e", Style::default().fg(Color::Green)),
+                    Span::raw(" exec  "),
+                    Span::styled("v", Style::default().fg(Color::Magenta)),
+                    Span::raw(" visual  "),
                     Span::styled("s", Style::default().fg(Color::Green)),
                     Span::raw(" start/stop  "),
                     Span::styled("r", Style::default().fg(Color::Green)),

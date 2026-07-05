@@ -26,16 +26,22 @@ pub enum Action {
     Escape,
     Char(char),
     Backspace,
+    HistoryPrev,
+    HistoryNext,
+    Exec,
+    Visual,
     None,
 }
 
 pub fn map_key(mode: &Mode, key: KeyEvent) -> Action {
     match mode {
         Mode::Normal => map_normal(key),
-        Mode::Filter(_) | Mode::Command(_) => map_text_input(key),
+        Mode::Filter(_) => map_filter_input(key),
+        Mode::Command(_) => map_command_input(key),
         Mode::Log { .. } => map_log(key),
         Mode::Confirm(_) => map_confirm(key),
         Mode::Menu { .. } => map_menu(key),
+        Mode::Visual { .. } => map_visual(key),
     }
 }
 
@@ -52,10 +58,25 @@ fn map_normal(key: KeyEvent) -> Action {
         (KeyCode::Char('r'), _) => Action::Restart,
         (KeyCode::Char('d'), _) => Action::Delete,
         (KeyCode::Char('l'), _) | (KeyCode::Enter, _) => Action::OpenLogs,
+        (KeyCode::Char('e'), _) => Action::Exec,
+        (KeyCode::Char('v'), _) => Action::Visual,
         (KeyCode::Char('R'), _) => Action::Refresh,
         (KeyCode::Char(':'), _) => Action::EnterCommand,
         (KeyCode::Char('/'), _) => Action::EnterFilter,
         (KeyCode::Tab, _) => Action::OpenMenu,
+        _ => Action::None,
+    }
+}
+
+fn map_visual(key: KeyEvent) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Esc, _) => Action::Escape,
+        (KeyCode::Char('j'), _) | (KeyCode::Down, _) => Action::MoveDown,
+        (KeyCode::Char('k'), _) | (KeyCode::Up, _) => Action::MoveUp,
+        (KeyCode::Char('g'), _) | (KeyCode::Home, _) => Action::Top,
+        (KeyCode::Char('G'), _) | (KeyCode::End, _) => Action::Bottom,
+        (KeyCode::Char('d'), _) => Action::Delete,
+        (KeyCode::Char('s'), _) => Action::ToggleStartStop,
         _ => Action::None,
     }
 }
@@ -81,7 +102,19 @@ fn map_log(key: KeyEvent) -> Action {
     }
 }
 
-fn map_text_input(key: KeyEvent) -> Action {
+fn map_command_input(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::Escape,
+        KeyCode::Enter => Action::Enter,
+        KeyCode::Backspace => Action::Backspace,
+        KeyCode::Up => Action::HistoryPrev,
+        KeyCode::Down => Action::HistoryNext,
+        KeyCode::Char(c) => Action::Char(c),
+        _ => Action::None,
+    }
+}
+
+fn map_filter_input(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => Action::Escape,
         KeyCode::Enter => Action::Enter,

@@ -22,37 +22,54 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_containers(f: &mut Frame, area: Rect, app: &App) {
     let visible = app.visible_containers();
+    let visual_range = app.visual_range();
+    let table_selected = app.visual_cursor().unwrap_or(app.selected);
 
     let header = bold_header(&["NAME", "IMAGE", "STATUS", "PORTS"]);
 
     let rows: Vec<Row> = visible
         .iter()
-        .map(|c| {
+        .enumerate()
+        .map(|(i, c)| {
             let state_style = match c.state {
                 ContainerState::Running => Style::default().fg(Color::Green),
                 ContainerState::Paused | ContainerState::Restarting => Style::default().fg(Color::Yellow),
                 _ => Style::default().fg(Color::Red),
             };
-            Row::new(vec![
+            let row = Row::new(vec![
                 Cell::from(c.name.as_str()),
                 Cell::from(c.image.as_str()),
                 Cell::from(Span::styled(c.status_text.as_str(), state_style)),
                 Cell::from(c.ports.as_str()),
-            ])
+            ]);
+            // Apply visual range background for rows inside the selection
+            if let Some((lo, hi)) = visual_range {
+                if i >= lo && i <= hi {
+                    return row.style(Style::default().bg(Color::Blue));
+                }
+            }
+            row
         })
         .collect();
 
     let title = section_title("Containers", visible.len(), app.containers.len(), &app.mode);
+
+    let hl_style = if visual_range.is_some() {
+        // In visual mode: cursor row stands out from the range with bright yellow
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD).bg(Color::Blue)
+    } else {
+        highlight_style()
+    };
 
     let table = Table::new(
         rows,
         [Constraint::Length(24), Constraint::Fill(1), Constraint::Length(20), Constraint::Length(22)],
     )
     .header(header)
-    .row_highlight_style(highlight_style())
+    .row_highlight_style(hl_style)
     .block(panel_block(title));
 
-    render_table(f, area, table, app.selected, visible.is_empty());
+    render_table(f, area, table, table_selected, visible.is_empty());
 }
 
 // ── Images ────────────────────────────────────────────────────────────────────

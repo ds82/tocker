@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::docker::client::SshTunnel;
 use crate::docker::types::{Container, ContainerState, Image, Network, Volume};
+use crate::history::History;
 use crate::input::{map_key, Action};
 
 // ── Section ───────────────────────────────────────────────────────────────────
@@ -56,6 +57,15 @@ impl Section {
             _ => Self::Networks,
         }
     }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "images" => Self::Images,
+            "volumes" => Self::Volumes,
+            "networks" => Self::Networks,
+            _ => Self::Containers,
+        }
+    }
 }
 
 // ── Mode ──────────────────────────────────────────────────────────────────────
@@ -68,11 +78,13 @@ pub enum Mode {
     Log { scroll: usize, follow: bool },
     Confirm(PendingAction),
     Menu { cursor: usize },
+    Visual { anchor: usize, cursor: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PendingAction {
     Remove { key: String, display: String },
+    BulkRemoveContainers { ids: Vec<String>, count: usize },
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -83,6 +95,7 @@ pub struct App {
     pub mode: Mode,
     pub section: Section,
     pub needs_refresh: bool,
+    pub pending_exec: Option<String>,
     // Section data
     pub containers: Vec<Container>,
     pub images: Vec<Image>,
@@ -94,16 +107,18 @@ pub struct App {
     pub status: Option<String>,
     log_rx: Option<mpsc::Receiver<String>>,
     _log_tx: Option<mpsc::Sender<String>>,
+    history: History,
 }
 
 impl App {
-    pub fn new(docker: Docker, tunnel: Option<SshTunnel>) -> Self {
+    pub fn new(docker: Docker, tunnel: Option<SshTunnel>, default_section: Section) -> Self {
         Self {
             docker: Arc::new(docker),
             _tunnel: tunnel,
             mode: Mode::Normal,
-            section: Section::Containers,
-            needs_refresh: false,
+            section: default_section,
+            needs_refresh: default_section != Section::Containers,
+            pending_exec: None,
             containers: Vec::new(),
             images: Vec::new(),
             volumes: Vec::new(),
@@ -113,6 +128,25 @@ impl App {
             status: None,
             log_rx: None,
             _log_tx: None,
+            history: History::load(),
+        }
+    }
+
+    // ── Visual mode helpers ──────────────────────────────────────────────────
+
+    pub fn visual_range(&self) -> Option<(usize, usize)> {
+        if let Mode::Visual { anchor, cursor } = self.mode {
+            Some((anchor.min(cursor), anchor.max(cursor)))
+        } else {
+            None
+        }
+    }
+
+    pub fn visual_cursor(&self) -> Option<usize> {
+        if let Mode::Visual { cursor, .. } = self.mode {
+            Some(cursor)
+        } else {
+            None
         }
     }
 
@@ -333,6 +367,7 @@ impl App {
             Mode::Log { .. } => self.dispatch_log(action),
             Mode::Confirm(pending) => self.dispatch_confirm(action, pending).await,
             Mode::Menu { cursor } => self.dispatch_menu(action, cursor),
+            Mode::Visual { anchor, cursor } => self.dispatch_visual(action, anchor, cursor).await,
         }
     }
 
@@ -379,10 +414,78 @@ impl App {
                     }
                 }
             }
+            Action::Exec => {
+                if self.section == Section::Containers {
+                    if let Some(c) = self.selected_container() {
+                        if c.state == ContainerState::Running {
+                            self.pending_exec = Some(c.full_id.clone());
+                        } else {
+                            self.status = Some(format!("{} is not running", c.name));
+                        }
+                    }
+                }
+            }
+            Action::Visual => {
+                if self.section == Section::Containers && !self.visible_containers().is_empty() {
+                    self.mode = Mode::Visual { anchor: self.selected, cursor: self.selected };
+                }
+            }
             Action::Refresh => self.refresh_current_section().await,
             Action::EnterCommand => self.mode = Mode::Command(String::new()),
             Action::EnterFilter => self.mode = Mode::Filter(String::new()),
             Action::OpenMenu => self.mode = Mode::Menu { cursor: self.section.index() },
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn dispatch_visual(&mut self, action: Action, anchor: usize, cursor: usize) -> Result<bool> {
+        let len = self.current_visible_len();
+        match action {
+            Action::Escape => {
+                self.selected = cursor;
+                self.mode = Mode::Normal;
+            }
+            Action::MoveDown => {
+                let new = (cursor + 1).min(len.saturating_sub(1));
+                self.mode = Mode::Visual { anchor, cursor: new };
+            }
+            Action::MoveUp => {
+                let new = cursor.saturating_sub(1);
+                self.mode = Mode::Visual { anchor, cursor: new };
+            }
+            Action::Top => {
+                self.mode = Mode::Visual { anchor, cursor: 0 };
+            }
+            Action::Bottom => {
+                self.mode = Mode::Visual { anchor, cursor: len.saturating_sub(1) };
+            }
+            Action::Delete => {
+                let lo = anchor.min(cursor);
+                let hi = anchor.max(cursor).min(len.saturating_sub(1));
+                let visible = self.visible_containers();
+                let ids: Vec<String> = visible[lo..=hi]
+                    .iter()
+                    .map(|c| c.full_id.clone())
+                    .collect();
+                let count = ids.len();
+                self.mode = Mode::Confirm(PendingAction::BulkRemoveContainers { ids, count });
+                self.selected = lo;
+            }
+            Action::ToggleStartStop => {
+                let lo = anchor.min(cursor);
+                let hi = anchor.max(cursor).min(len.saturating_sub(1));
+                let visible = self.visible_containers();
+                let targets: Vec<(String, ContainerState)> = visible[lo..=hi]
+                    .iter()
+                    .map(|c| (c.full_id.clone(), c.state.clone()))
+                    .collect();
+                self.mode = Mode::Normal;
+                self.selected = lo;
+                for (id, state) in targets {
+                    self.toggle_container(id, state).await;
+                }
+            }
             _ => {}
         }
         Ok(false)
@@ -443,17 +546,25 @@ impl App {
 
     async fn dispatch_command(&mut self, action: Action) -> Result<bool> {
         match action {
-            Action::Escape => self.mode = Mode::Normal,
+            Action::Escape => {
+                self.history.reset_cursor();
+                self.mode = Mode::Normal;
+            }
             Action::Enter => {
                 let cmd = if let Mode::Command(ref s) = self.mode {
                     s.trim().to_string()
                 } else {
                     String::new()
                 };
+                self.history.reset_cursor();
                 self.mode = Mode::Normal;
+                if !cmd.is_empty() {
+                    self.history.push(cmd.clone());
+                }
                 return self.execute_command(&cmd).await;
             }
             Action::Char(c) => {
+                self.history.reset_cursor();
                 if let Mode::Command(ref mut s) = self.mode {
                     s.push(c);
                 }
@@ -461,6 +572,19 @@ impl App {
             Action::Backspace => {
                 if let Mode::Command(ref mut s) = self.mode {
                     s.pop();
+                }
+            }
+            Action::HistoryPrev => {
+                let current = if let Mode::Command(ref s) = self.mode { s.clone() } else { String::new() };
+                if let Some(entry) = self.history.prev(&current) {
+                    let entry = entry.to_string();
+                    self.mode = Mode::Command(entry);
+                }
+            }
+            Action::HistoryNext => {
+                if let Some(entry) = self.history.next() {
+                    let entry = entry.to_string();
+                    self.mode = Mode::Command(entry);
                 }
             }
             _ => {}
@@ -509,12 +633,26 @@ impl App {
         match action {
             Action::Confirm => {
                 self.mode = Mode::Normal;
-                let PendingAction::Remove { key, .. } = pending;
-                match self.section {
-                    Section::Containers => self.remove_container(key).await,
-                    Section::Images => self.remove_image(key).await,
-                    Section::Volumes => self.remove_volume(key).await,
-                    Section::Networks => self.remove_network(key).await,
+                match pending {
+                    PendingAction::Remove { key, .. } => {
+                        match self.section {
+                            Section::Containers => self.remove_container(key).await,
+                            Section::Images => self.remove_image(key).await,
+                            Section::Volumes => self.remove_volume(key).await,
+                            Section::Networks => self.remove_network(key).await,
+                        }
+                    }
+                    PendingAction::BulkRemoveContainers { ids, .. } => {
+                        for id in ids {
+                            let _ = self.docker
+                                .remove_container(
+                                    &id,
+                                    Some(RemoveContainerOptionsBuilder::default().force(true).build()),
+                                )
+                                .await;
+                        }
+                        self.refresh_containers().await;
+                    }
                 }
             }
             Action::Cancel | Action::Escape => {
