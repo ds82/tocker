@@ -197,6 +197,7 @@ impl App {
         {
             Ok(list) => {
                 self.containers = list.into_iter().map(Container::from).collect();
+                self.containers.sort_unstable_by(|a, b| a.name.cmp(&b.name));
                 self.clamp_selected();
                 self.status = None;
             }
@@ -214,6 +215,9 @@ impl App {
         {
             Ok(list) => {
                 self.images = list.into_iter().map(Image::from).collect();
+                self.images.sort_unstable_by(|a, b| {
+                    a.repository.cmp(&b.repository).then(a.tag.cmp(&b.tag))
+                });
                 self.clamp_selected();
                 self.status = None;
             }
@@ -230,6 +234,7 @@ impl App {
                     .into_iter()
                     .map(Volume::from)
                     .collect();
+                self.volumes.sort_unstable_by(|a, b| a.name.cmp(&b.name));
                 self.clamp_selected();
                 self.status = None;
             }
@@ -241,6 +246,7 @@ impl App {
         match self.docker.list_networks(None::<bollard::query_parameters::ListNetworksOptions>).await {
             Ok(list) => {
                 self.networks = list.into_iter().map(Network::from).collect();
+                self.networks.sort_unstable_by(|a, b| a.name.cmp(&b.name));
                 self.clamp_selected();
                 self.status = None;
             }

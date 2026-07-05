@@ -60,11 +60,16 @@ impl From<ContainerSummary> for Container {
             .unwrap_or(ContainerState::Unknown(String::new()));
         let status_text = s.status.unwrap_or_default();
 
-        let ports = s
+        let mut port_pairs: Vec<(u16, u16)> = s
             .ports
             .unwrap_or_default()
             .iter()
-            .filter_map(|p| p.public_port.map(|pub_port| format!("{}→{}", pub_port, p.private_port)))
+            .filter_map(|p| p.public_port.map(|pp| (pp, p.private_port)))
+            .collect();
+        port_pairs.sort_unstable();
+        let ports = port_pairs
+            .iter()
+            .map(|(pub_port, priv_port)| format!("{pub_port}→{priv_port}"))
             .collect::<Vec<_>>()
             .join(" ");
 
