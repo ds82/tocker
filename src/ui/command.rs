@@ -8,6 +8,8 @@ use ratatui::{
 
 use crate::app::{App, Mode, PendingAction};
 
+const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
     let mode_label = match &app.mode {
         Mode::Normal => {
@@ -92,7 +94,10 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
             let count = hi - lo + 1;
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled(format!("{count} selected"), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{count} selected"),
+                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("  "),
                 Span::styled("j/k", Style::default().fg(Color::Magenta)),
                 Span::raw(" extend  "),
@@ -106,7 +111,25 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
         }
 
         _ => {
-            if let Some(ref msg) = app.status {
+            // Spinner takes priority over static hints while commands are running
+            if app.pending_count > 0 {
+                let ch = SPINNER[app.spinner_frame as usize % SPINNER.len()];
+                let extra = if app.pending_count > 1 {
+                    format!("  (+{} more)", app.pending_count - 1)
+                } else {
+                    String::new()
+                };
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        ch.to_string(),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(app.spinner_label.as_str(), Style::default().fg(Color::Cyan)),
+                    Span::styled(extra, Style::default().fg(Color::DarkGray)),
+                ])
+            } else if let Some(ref msg) = app.status {
                 Line::from(Span::styled(
                     format!(" {msg}"),
                     Style::default().fg(Color::Yellow),

@@ -64,6 +64,10 @@ where
     let mut docker_tick = interval(Duration::from_millis(refresh_interval_ms));
     docker_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+    // Spinner animation tick — only active while commands are pending
+    let mut spin_tick = interval(Duration::from_millis(100));
+    spin_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
     app.refresh_current_section().await;
 
     loop {
@@ -90,13 +94,24 @@ where
                 }
             }
             _ = docker_tick.tick() => {
-                if matches!(app.mode, app::Mode::Normal | app::Mode::Filter(_) | app::Mode::Visual { .. }) {
+                if matches!(
+                    app.mode,
+                    app::Mode::Normal | app::Mode::Filter(_) | app::Mode::Visual { .. }
+                ) {
                     app.refresh_current_section().await;
                 }
             }
-            maybe_line = app.recv_log_line() => {
-                if let Some(line) = maybe_line {
-                    app.push_log_line(line);
+            // Advance spinner frame — disabled when nothing is pending
+            _ = spin_tick.tick(), if app.pending_count > 0 => {
+                app.spinner_frame = app.spinner_frame.wrapping_add(1);
+            }
+            // Background task results: Docker command completions and log lines
+            maybe_msg = app.recv_msg() => {
+                if let Some(msg) = maybe_msg {
+                    match msg {
+                        app::AppMsg::LogLine(line) => app.push_log_line(line),
+                        app::AppMsg::Cmd(result) => app.handle_cmd_result(result).await,
+                    }
                 }
             }
         }

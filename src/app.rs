@@ -6,7 +6,7 @@ use bollard::query_parameters::{
 use bollard::Docker;
 use futures::StreamExt;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::docker::client::SshTunnel;
 use crate::docker::types::{Container, ContainerState, Image, Network, Volume};
@@ -87,6 +87,19 @@ pub enum PendingAction {
     BulkRemoveContainers { ids: Vec<String>, count: usize },
 }
 
+// ── Async messaging ───────────────────────────────────────────────────────────
+
+/// Events arriving from background tasks, delivered via a single channel.
+pub enum AppMsg {
+    LogLine(String),
+    Cmd(CmdResult),
+}
+
+pub enum CmdResult {
+    Done { refresh: Section },
+    Failed { message: String },
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -105,13 +118,21 @@ pub struct App {
     // Log viewer
     pub log_lines: Vec<String>,
     pub status: Option<String>,
-    log_rx: Option<mpsc::Receiver<String>>,
-    _log_tx: Option<mpsc::Sender<String>>,
+    log_stop_tx: Option<oneshot::Sender<()>>,
+    // Async task messaging
+    msg_tx: mpsc::Sender<AppMsg>,
+    msg_rx: mpsc::Receiver<AppMsg>,
+    // Spinner state (visible while pending_count > 0)
+    pub pending_count: usize,
+    pub spinner_frame: u8,
+    pub spinner_label: String,
+    // Command history
     history: History,
 }
 
 impl App {
     pub fn new(docker: Docker, tunnel: Option<SshTunnel>, default_section: Section) -> Self {
+        let (msg_tx, msg_rx) = mpsc::channel(256);
         Self {
             docker: Arc::new(docker),
             _tunnel: tunnel,
@@ -126,8 +147,12 @@ impl App {
             selected: 0,
             log_lines: Vec::new(),
             status: None,
-            log_rx: None,
-            _log_tx: None,
+            log_stop_tx: None,
+            msg_tx,
+            msg_rx,
+            pending_count: 0,
+            spinner_frame: 0,
+            spinner_label: String::new(),
             history: History::load(),
         }
     }
@@ -297,15 +322,43 @@ impl App {
         }
     }
 
+    // ── Async message channel ─────────────────────────────────────────────────
+
+    /// Receive the next background task message. Blocks until a message arrives.
+    /// Safe to use in a tokio::select! arm alongside other arms.
+    pub async fn recv_msg(&mut self) -> Option<AppMsg> {
+        self.msg_rx.recv().await
+    }
+
+    /// Process a completed command result, updating spinner and triggering a refresh.
+    pub async fn handle_cmd_result(&mut self, result: CmdResult) {
+        self.pending_count = self.pending_count.saturating_sub(1);
+        match result {
+            CmdResult::Done { refresh } => {
+                self.status = None;
+                match refresh {
+                    Section::Containers => self.refresh_containers().await,
+                    Section::Images => self.refresh_images().await,
+                    Section::Volumes => self.refresh_volumes().await,
+                    Section::Networks => self.refresh_networks().await,
+                }
+            }
+            CmdResult::Failed { message } => {
+                self.status = Some(message);
+            }
+        }
+    }
+
     // ── Log streaming ─────────────────────────────────────────────────────────
 
     pub fn start_log_stream(&mut self, full_id: String) {
-        let (tx, rx) = mpsc::channel(512);
-        self._log_tx = Some(tx.clone());
-        self.log_rx = Some(rx);
         self.log_lines.clear();
+        let (stop_tx, stop_rx) = oneshot::channel::<()>();
+        self.log_stop_tx = Some(stop_tx);
 
+        let msg_tx = self.msg_tx.clone();
         let docker = Arc::clone(&self.docker);
+
         tokio::spawn(async move {
             let opts = LogsOptionsBuilder::default()
                 .follow(true)
@@ -313,30 +366,28 @@ impl App {
                 .stderr(true)
                 .tail("200")
                 .build();
-            let mut stream = docker.logs(&full_id, Some(opts));
-            while let Some(Ok(chunk)) = stream.next().await {
-                if tx.send(chunk.to_string()).await.is_err() {
-                    break;
+            let mut stream = docker.logs(&full_id, Some(opts)).boxed();
+            let mut stop_rx = stop_rx;
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    chunk = stream.next() => {
+                        match chunk {
+                            Some(Ok(c)) => {
+                                if msg_tx.send(AppMsg::LogLine(c.to_string())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
                 }
             }
         });
     }
 
     pub fn stop_log_stream(&mut self) {
-        self._log_tx = None;
-        self.log_rx = None;
-    }
-
-    /// Never resolves when no stream is active — safe to use as a select! arm.
-    pub async fn recv_log_line(&mut self) -> Option<String> {
-        if self.log_rx.is_none() {
-            return std::future::pending().await;
-        }
-        let line = self.log_rx.as_mut().unwrap().recv().await;
-        if line.is_none() {
-            self.log_rx = None;
-        }
-        line
+        self.log_stop_tx = None; // drop signals the task to stop
     }
 
     pub fn push_log_line(&mut self, raw: String) {
@@ -365,9 +416,9 @@ impl App {
             Mode::Filter(_) => self.dispatch_filter(action),
             Mode::Command(_) => self.dispatch_command(action).await,
             Mode::Log { .. } => self.dispatch_log(action),
-            Mode::Confirm(pending) => self.dispatch_confirm(action, pending).await,
+            Mode::Confirm(pending) => self.dispatch_confirm(action, pending),
             Mode::Menu { cursor } => self.dispatch_menu(action, cursor),
-            Mode::Visual { anchor, cursor } => self.dispatch_visual(action, anchor, cursor).await,
+            Mode::Visual { anchor, cursor } => self.dispatch_visual(action, anchor, cursor),
         }
     }
 
@@ -395,14 +446,16 @@ impl App {
             Action::ToggleStartStop => {
                 if self.section == Section::Containers {
                     if let Some(c) = self.selected_container().cloned() {
-                        self.toggle_container(c.full_id, c.state).await;
+                        let name = c.name.clone();
+                        self.spawn_toggle(c.full_id, c.state, name);
                     }
                 }
             }
             Action::Restart => {
                 if self.section == Section::Containers {
                     if let Some(c) = self.selected_container().cloned() {
-                        self.restart_container(c.full_id).await;
+                        let name = c.name.clone();
+                        self.spawn_restart(c.full_id, name);
                     }
                 }
             }
@@ -439,7 +492,7 @@ impl App {
         Ok(false)
     }
 
-    async fn dispatch_visual(&mut self, action: Action, anchor: usize, cursor: usize) -> Result<bool> {
+    fn dispatch_visual(&mut self, action: Action, anchor: usize, cursor: usize) -> Result<bool> {
         let len = self.current_visible_len();
         match action {
             Action::Escape => {
@@ -476,14 +529,14 @@ impl App {
                 let lo = anchor.min(cursor);
                 let hi = anchor.max(cursor).min(len.saturating_sub(1));
                 let visible = self.visible_containers();
-                let targets: Vec<(String, ContainerState)> = visible[lo..=hi]
+                let targets: Vec<(String, String, ContainerState)> = visible[lo..=hi]
                     .iter()
-                    .map(|c| (c.full_id.clone(), c.state.clone()))
+                    .map(|c| (c.full_id.clone(), c.name.clone(), c.state.clone()))
                     .collect();
                 self.mode = Mode::Normal;
                 self.selected = lo;
-                for (id, state) in targets {
-                    self.toggle_container(id, state).await;
+                for (id, name, state) in targets {
+                    self.spawn_toggle(id, state, name);
                 }
             }
             _ => {}
@@ -575,7 +628,11 @@ impl App {
                 }
             }
             Action::HistoryPrev => {
-                let current = if let Mode::Command(ref s) = self.mode { s.clone() } else { String::new() };
+                let current = if let Mode::Command(ref s) = self.mode {
+                    s.clone()
+                } else {
+                    String::new()
+                };
                 if let Some(entry) = self.history.prev(&current) {
                     let entry = entry.to_string();
                     self.mode = Mode::Command(entry);
@@ -629,29 +686,24 @@ impl App {
         Ok(false)
     }
 
-    async fn dispatch_confirm(&mut self, action: Action, pending: PendingAction) -> Result<bool> {
+    fn dispatch_confirm(&mut self, action: Action, pending: PendingAction) -> Result<bool> {
         match action {
             Action::Confirm => {
                 self.mode = Mode::Normal;
                 match pending {
-                    PendingAction::Remove { key, .. } => {
+                    PendingAction::Remove { key, display } => {
                         match self.section {
-                            Section::Containers => self.remove_container(key).await,
-                            Section::Images => self.remove_image(key).await,
-                            Section::Volumes => self.remove_volume(key).await,
-                            Section::Networks => self.remove_network(key).await,
+                            Section::Containers => self.spawn_remove_container(key, display),
+                            Section::Images => self.spawn_remove_image(key, display),
+                            Section::Volumes => self.spawn_remove_volume(key),
+                            Section::Networks => self.spawn_remove_network(key, display),
                         }
                     }
-                    PendingAction::BulkRemoveContainers { ids, .. } => {
-                        for id in ids {
-                            let _ = self.docker
-                                .remove_container(
-                                    &id,
-                                    Some(RemoveContainerOptionsBuilder::default().force(true).build()),
-                                )
-                                .await;
+                    PendingAction::BulkRemoveContainers { ids, count } => {
+                        for (i, id) in ids.into_iter().enumerate() {
+                            let label = format!("removing container {} of {count}", i + 1);
+                            self.spawn_remove_container(id, label);
                         }
-                        self.refresh_containers().await;
                     }
                 }
             }
@@ -697,90 +749,96 @@ impl App {
         Ok(false)
     }
 
-    // ── Docker actions ────────────────────────────────────────────────────────
+    // ── Background task spawning ──────────────────────────────────────────────
 
-    async fn toggle_container(&mut self, full_id: String, state: ContainerState) {
-        let result = if state == ContainerState::Running {
-            self.docker
-                .stop_container(
+    /// Spawn a Docker command as a background task. The task sends a CmdResult
+    /// through the app message channel when done, which the event loop processes.
+    fn spawn_cmd<F, Fut>(&mut self, label: impl Into<String>, refresh: Section, f: F)
+    where
+        F: FnOnce(Arc<Docker>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+    {
+        let label = label.into();
+        let docker = Arc::clone(&self.docker);
+        let tx = self.msg_tx.clone();
+        self.pending_count += 1;
+        self.spinner_label = label;
+
+        tokio::spawn(async move {
+            let result = match f(docker).await {
+                Ok(()) => CmdResult::Done { refresh },
+                Err(msg) => CmdResult::Failed { message: format!("error: {msg}") },
+            };
+            let _ = tx.send(AppMsg::Cmd(result)).await;
+        });
+    }
+
+    fn spawn_toggle(&mut self, full_id: String, state: ContainerState, name: String) {
+        let label = if state == ContainerState::Running {
+            format!("stopping {name}")
+        } else {
+            format!("starting {name}")
+        };
+        self.spawn_cmd(label, Section::Containers, move |docker| async move {
+            let r = if state == ContainerState::Running {
+                docker
+                    .stop_container(
+                        &full_id,
+                        Some(StopContainerOptionsBuilder::default().t(10).build()),
+                    )
+                    .await
+            } else {
+                docker.start_container(&full_id, None).await
+            };
+            r.map_err(|e| e.to_string())
+        });
+    }
+
+    fn spawn_restart(&mut self, full_id: String, name: String) {
+        self.spawn_cmd(format!("restarting {name}"), Section::Containers, move |docker| async move {
+            docker.restart_container(&full_id, None).await.map_err(|e| e.to_string())
+        });
+    }
+
+    fn spawn_remove_container(&mut self, full_id: String, display: String) {
+        self.spawn_cmd(format!("removing {display}"), Section::Containers, move |docker| async move {
+            docker
+                .remove_container(
                     &full_id,
-                    Some(StopContainerOptionsBuilder::default().t(10).build()),
+                    Some(RemoveContainerOptionsBuilder::default().force(true).build()),
                 )
                 .await
-        } else {
-            self.docker.start_container(&full_id, None).await
-        };
-        match result {
-            Ok(_) => {
-                self.status = None;
-                self.refresh_containers().await;
-            }
-            Err(e) => self.status = Some(format!("error: {e}")),
-        }
+                .map_err(|e| e.to_string())
+        });
     }
 
-    async fn restart_container(&mut self, full_id: String) {
-        match self.docker.restart_container(&full_id, None).await {
-            Ok(_) => {
-                self.status = None;
-                self.refresh_containers().await;
-            }
-            Err(e) => self.status = Some(format!("error: {e}")),
-        }
+    fn spawn_remove_image(&mut self, key: String, display: String) {
+        self.spawn_cmd(format!("removing {display}"), Section::Images, move |docker| async move {
+            docker
+                .remove_image(
+                    &key,
+                    Some(RemoveImageOptionsBuilder::default().force(true).build()),
+                    None,
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
     }
 
-    async fn remove_container(&mut self, full_id: String) {
-        match self
-            .docker
-            .remove_container(
-                &full_id,
-                Some(RemoveContainerOptionsBuilder::default().force(true).build()),
-            )
-            .await
-        {
-            Ok(_) => {
-                self.status = None;
-                self.refresh_containers().await;
-            }
-            Err(e) => self.status = Some(format!("error: {e}")),
-        }
+    fn spawn_remove_volume(&mut self, name: String) {
+        let label = format!("removing {name}");
+        self.spawn_cmd(label, Section::Volumes, move |docker| async move {
+            docker
+                .remove_volume(&name, None::<bollard::query_parameters::RemoveVolumeOptions>)
+                .await
+                .map_err(|e| e.to_string())
+        });
     }
 
-    async fn remove_image(&mut self, key: String) {
-        match self
-            .docker
-            .remove_image(
-                &key,
-                Some(RemoveImageOptionsBuilder::default().force(true).build()),
-                None,
-            )
-            .await
-        {
-            Ok(_) => {
-                self.status = None;
-                self.refresh_images().await;
-            }
-            Err(e) => self.status = Some(format!("error: {e}")),
-        }
-    }
-
-    async fn remove_volume(&mut self, name: String) {
-        match self.docker.remove_volume(&name, None::<bollard::query_parameters::RemoveVolumeOptions>).await {
-            Ok(_) => {
-                self.status = None;
-                self.refresh_volumes().await;
-            }
-            Err(e) => self.status = Some(format!("error: {e}")),
-        }
-    }
-
-    async fn remove_network(&mut self, id: String) {
-        match self.docker.remove_network(&id).await {
-            Ok(_) => {
-                self.status = None;
-                self.refresh_networks().await;
-            }
-            Err(e) => self.status = Some(format!("error: {e}")),
-        }
+    fn spawn_remove_network(&mut self, id: String, name: String) {
+        self.spawn_cmd(format!("removing {name}"), Section::Networks, move |docker| async move {
+            docker.remove_network(&id).await.map_err(|e| e.to_string())
+        });
     }
 }
