@@ -299,7 +299,17 @@ impl App {
         {
             Ok(list) => {
                 self.containers = list.into_iter().map(Container::from).collect();
-                self.containers.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+                // Sort: compose groups first (alphabetical by project), ungrouped last,
+                // name-sorted within each group. This keeps visible_containers() order
+                // in sync with the grouped display so selection indices are correct.
+                self.containers.sort_unstable_by(|a, b| {
+                    match (&a.compose_project, &b.compose_project) {
+                        (Some(ap), Some(bp)) => ap.cmp(bp).then(a.name.cmp(&b.name)),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => a.name.cmp(&b.name),
+                    }
+                });
                 self.clamp_selected();
                 self.status = None;
             }
