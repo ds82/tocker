@@ -71,6 +71,7 @@ fn map_normal(key: KeyEvent) -> Action {
         (KeyCode::Char(':'), _) => Action::EnterCommand,
         (KeyCode::Char('/'), _) => Action::EnterFilter,
         (KeyCode::Tab, _) => Action::OpenMenu,
+        (KeyCode::Esc, _) => Action::Escape,
         _ => Action::None,
     }
 }

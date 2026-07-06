@@ -48,7 +48,14 @@ pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
 
     let right = Span::styled(" tocker ", Style::default().fg(Color::DarkGray));
 
-    let line = Line::from(vec![mode_label, section, right]);
+    let mut spans = vec![mode_label, section];
+    if !app.filter.is_empty() {
+        spans.push(Span::styled("  / ", Style::default().fg(Color::Cyan)));
+        spans.push(Span::styled(app.filter.as_str(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+    }
+    spans.push(right);
+
+    let line = Line::from(spans);
     f.render_widget(
         Paragraph::new(line).style(Style::default().bg(Color::DarkGray)),
         area,

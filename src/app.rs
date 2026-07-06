@@ -111,6 +111,7 @@ pub struct App {
     pub mode: Mode,
     pub section: Section,
     pub needs_refresh: bool,
+    pub filter: String,
     pub pending_exec: Option<(String, String, bool)>,
     // Section data
     pub containers: Vec<Container>,
@@ -143,6 +144,7 @@ impl App {
             mode: Mode::Normal,
             section: default_section,
             needs_refresh: default_section != Section::Containers,
+            filter: String::new(),
             pending_exec: None,
             containers: Vec::new(),
             images: Vec::new(),
@@ -206,13 +208,15 @@ impl App {
     where
         F: Fn(&T) -> String,
     {
-        if let Mode::Filter(ref q) = self.mode {
-            if !q.is_empty() {
-                let q = q.to_lowercase();
-                return list.iter().filter(|item| key_fn(item).to_lowercase().contains(&q)).collect();
-            }
+        let q = match &self.mode {
+            Mode::Filter(ref s) => s.as_str(),
+            _ => self.filter.as_str(),
+        };
+        if q.is_empty() {
+            return list.iter().collect();
         }
-        list.iter().collect()
+        let q = q.to_lowercase();
+        list.iter().filter(|item| key_fn(item).to_lowercase().contains(&q)).collect()
     }
 
     pub fn current_visible_len(&self) -> usize {
@@ -499,7 +503,11 @@ impl App {
             }
             Action::Refresh => self.refresh_current_section().await,
             Action::EnterCommand => self.mode = Mode::Command(String::new()),
-            Action::EnterFilter => self.mode = Mode::Filter(String::new()),
+            Action::EnterFilter => self.mode = Mode::Filter(self.filter.clone()),
+            Action::Escape => {
+                self.filter.clear();
+                self.selected = 0;
+            }
             Action::OpenMenu => self.mode = Mode::Menu { cursor: self.section.index() },
             Action::EnterYank => self.mode = Mode::Yank,
             _ => {}
@@ -699,9 +707,17 @@ impl App {
 
     fn dispatch_filter(&mut self, action: Action) -> Result<bool> {
         match action {
-            Action::Escape | Action::Enter => {
+            Action::Enter => {
+                // Commit the typed filter and return to Normal — filter stays active
+                if let Mode::Filter(ref s) = self.mode {
+                    self.filter = s.clone();
+                }
                 self.mode = Mode::Normal;
                 self.selected = 0;
+            }
+            Action::Escape => {
+                // Cancel edit — leave the previously committed filter untouched
+                self.mode = Mode::Normal;
             }
             Action::Char(c) => {
                 if let Mode::Filter(ref mut s) = self.mode {
