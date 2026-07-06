@@ -115,6 +115,7 @@ where
                     match msg {
                         app::AppMsg::LogLine(line) => app.push_log_line(line),
                         app::AppMsg::Cmd(result) => app.handle_cmd_result(result).await,
+                        app::AppMsg::InspectDetail(extra) => app.container_inspect = Some(extra),
                     }
                 }
             }

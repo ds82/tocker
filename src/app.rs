@@ -93,12 +93,34 @@ pub enum PendingAction {
     BulkRemoveContainers { ids: Vec<String>, count: usize },
 }
 
+// ── Container inspect detail ──────────────────────────────────────────────────
+
+pub struct ContainerInspectExtra {
+    pub mounts: Vec<MountInfo>,
+    pub networks: Vec<NetworkInfo>,
+}
+
+pub struct MountInfo {
+    pub mount_type: String,
+    pub source: String,
+    pub destination: String,
+    pub rw: bool,
+}
+
+pub struct NetworkInfo {
+    pub name: String,
+    pub ip: String,
+    pub gateway: String,
+    pub mac: String,
+}
+
 // ── Async messaging ───────────────────────────────────────────────────────────
 
 /// Events arriving from background tasks, delivered via a single channel.
 pub enum AppMsg {
     LogLine(String),
     Cmd(CmdResult),
+    InspectDetail(ContainerInspectExtra),
 }
 
 pub enum CmdResult {
@@ -136,6 +158,8 @@ pub struct App {
     // Command history
     history: History,
     exec_history: History,
+    // Container inspect detail loaded asynchronously
+    pub container_inspect: Option<ContainerInspectExtra>,
     // Status toast — auto-clears after expiry
     pub status_expires: Option<std::time::Instant>,
     // Theme (resolved from config)
@@ -168,6 +192,7 @@ impl App {
             spinner_label: String::new(),
             history: History::load(),
             exec_history: History::load_named("exec_history"),
+            container_inspect: None,
             status_expires: None,
             theme,
         }
@@ -387,18 +412,39 @@ impl App {
             Section::Containers => {
                 let Some(c) = self.selected_container() else { return vec![] };
                 let mut lines = vec![
-                    ("Name",   c.name.clone()),
-                    ("ID",     c.full_id.chars().take(12).collect()),
-                    ("Full ID",c.full_id.clone()),
-                    ("Image",  c.image.clone()),
-                    ("State",  format!("{:?}", c.state).to_lowercase()),
-                    ("Status", c.status_text.clone()),
+                    ("Name",    c.name.clone()),
+                    ("ID",      c.full_id.chars().take(12).collect()),
+                    ("Full ID", c.full_id.clone()),
+                    ("Image",   c.image.clone()),
+                    ("State",   format!("{:?}", c.state).to_lowercase()),
+                    ("Status",  c.status_text.clone()),
                 ];
                 if !c.ports.is_empty() {
                     lines.push(("Ports", c.ports.clone()));
                 }
                 if let Some(ref proj) = c.compose_project {
                     lines.push(("Compose", proj.clone()));
+                }
+                match &self.container_inspect {
+                    Some(extra) => {
+                        for m in &extra.mounts {
+                            let rw = if m.rw { "rw" } else { "ro" };
+                            lines.push(("Mount", format!(
+                                "{} → {}  ({}, {rw})",
+                                m.source, m.destination, m.mount_type
+                            )));
+                        }
+                        for n in &extra.networks {
+                            let mut parts = vec![n.name.clone()];
+                            if !n.ip.is_empty() { parts.push(n.ip.clone()); }
+                            if !n.gateway.is_empty() { parts.push(format!("gw {}", n.gateway)); }
+                            if !n.mac.is_empty() { parts.push(n.mac.clone()); }
+                            lines.push(("Network", parts.join("  ")));
+                        }
+                    }
+                    None => {
+                        lines.push(("", "loading…".into()));
+                    }
                 }
                 lines
             }
@@ -589,7 +635,15 @@ impl App {
             Action::OpenMenu => self.mode = Mode::Menu { cursor: self.section.index() },
             Action::EnterYank => self.mode = Mode::Yank,
             Action::OpenHelp => self.mode = Mode::Help { scroll: 0 },
-            Action::Inspect => self.mode = Mode::Inspect { scroll: 0 },
+            Action::Inspect => {
+                self.container_inspect = None;
+                self.mode = Mode::Inspect { scroll: 0 };
+                if self.section == Section::Containers {
+                    if let Some(c) = self.selected_container() {
+                        self.spawn_inspect(c.full_id.clone());
+                    }
+                }
+            }
             _ => {}
         }
         Ok(false)
@@ -721,7 +775,10 @@ impl App {
 
     fn dispatch_inspect(&mut self, action: Action) -> Result<bool> {
         match action {
-            Action::Escape | Action::Inspect => self.mode = Mode::Normal,
+            Action::Escape | Action::Inspect => {
+                self.mode = Mode::Normal;
+                self.container_inspect = None;
+            }
             Action::MoveDown => {
                 if let Mode::Inspect { ref mut scroll } = self.mode { *scroll += 1; }
             }
@@ -998,6 +1055,48 @@ impl App {
             _ => self.status = Some(format!("unknown command: :{cmd}")),
         }
         Ok(false)
+    }
+
+    // ── Inspect ───────────────────────────────────────────────────────────────
+
+    fn spawn_inspect(&mut self, container_id: String) {
+        let docker = Arc::clone(&self.docker);
+        let tx = self.msg_tx.clone();
+        tokio::spawn(async move {
+            let Ok(info) = docker
+                .inspect_container(&container_id, None::<bollard::query_parameters::InspectContainerOptions>)
+                .await
+            else {
+                return;
+            };
+
+            let mounts = info.mounts.unwrap_or_default().into_iter().map(|m| {
+                let mount_type = m.typ
+                    .map(|t| format!("{t:?}").to_lowercase())
+                    .unwrap_or_else(|| "unknown".into());
+                MountInfo {
+                    mount_type,
+                    source: m.source.unwrap_or_default(),
+                    destination: m.destination.unwrap_or_default(),
+                    rw: m.rw.unwrap_or(true),
+                }
+            }).collect();
+
+            let networks = info
+                .network_settings
+                .and_then(|ns| ns.networks)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, ep)| NetworkInfo {
+                    name,
+                    ip: ep.ip_address.unwrap_or_default(),
+                    gateway: ep.gateway.unwrap_or_default(),
+                    mac: ep.mac_address.unwrap_or_default(),
+                })
+                .collect();
+
+            let _ = tx.send(AppMsg::InspectDetail(ContainerInspectExtra { mounts, networks })).await;
+        });
     }
 
     // ── Background task spawning ──────────────────────────────────────────────
