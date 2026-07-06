@@ -5,9 +5,44 @@ on:
   pull_request:
 
 jobs:
-  build:
-    name: Build & check
+  check:
+    name: Lint
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --check
+
+      - run: cargo clippy -- -D warnings
+
+  build:
+    name: Build · ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: tocker-linux-x86_64
+
+          - name: Linux i686
+            os: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            artifact: tocker-linux-i686
+            cross: true
+
+          - name: macOS arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: tocker-macos-aarch64
 
     steps:
       - uses: actions/checkout@v4
@@ -15,16 +50,32 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@cross
 
-      - name: Check formatting
-        run: cargo fmt --check
+      - name: Set OpenSSL path (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
-      - name: Clippy
-        run: cargo clippy -- -D warnings
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.target }}/release/tocker
