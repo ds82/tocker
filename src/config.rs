@@ -5,6 +5,7 @@ use crate::theme::ThemeConfig;
 
 #[derive(Debug, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub general: GeneralConfig,
     pub theme: ThemeConfig,
@@ -15,15 +16,6 @@ pub struct Config {
 pub struct GeneralConfig {
     pub refresh_interval_ms: u64,
     pub default_section: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            theme: ThemeConfig::default(),
-        }
-    }
 }
 
 impl Default for GeneralConfig {
