@@ -81,6 +81,7 @@ pub enum Mode {
     Menu { cursor: usize },
     Visual { anchor: usize, cursor: usize },
     Yank,
+    Exec { container_id: String, input: String, interactive: bool },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,7 +111,7 @@ pub struct App {
     pub mode: Mode,
     pub section: Section,
     pub needs_refresh: bool,
-    pub pending_exec: Option<String>,
+    pub pending_exec: Option<(String, String, bool)>,
     // Section data
     pub containers: Vec<Container>,
     pub images: Vec<Image>,
@@ -130,6 +131,7 @@ pub struct App {
     pub spinner_label: String,
     // Command history
     history: History,
+    exec_history: History,
 }
 
 impl App {
@@ -156,6 +158,7 @@ impl App {
             spinner_frame: 0,
             spinner_label: String::new(),
             history: History::load(),
+            exec_history: History::load_named("exec_history"),
         }
     }
 
@@ -422,6 +425,7 @@ impl App {
             Mode::Menu { cursor } => self.dispatch_menu(action, cursor),
             Mode::Visual { anchor, cursor } => self.dispatch_visual(action, anchor, cursor),
             Mode::Yank => self.dispatch_yank(action),
+            Mode::Exec { .. } => self.dispatch_exec(action),
         }
     }
 
@@ -474,7 +478,14 @@ impl App {
                 if self.section == Section::Containers {
                     if let Some(c) = self.selected_container() {
                         if c.state == ContainerState::Running {
-                            self.pending_exec = Some(c.full_id.clone());
+                            let default = self.exec_history.last()
+                                .unwrap_or("sh")
+                                .to_string();
+                            self.mode = Mode::Exec {
+                                container_id: c.full_id.clone(),
+                                input: default,
+                                interactive: true,
+                            };
                         } else {
                             self.status = Some(format!("{} is not running", c.name));
                         }
@@ -540,6 +551,68 @@ impl App {
             Section::Images => self.selected_image().map(|i| i.id.clone()),
             _ => None,
         }
+    }
+
+    fn dispatch_exec(&mut self, action: Action) -> Result<bool> {
+        match action {
+            Action::Escape => {
+                self.exec_history.reset_cursor();
+                self.mode = Mode::Normal;
+            }
+            Action::Enter => {
+                let (container_id, raw, interactive) =
+                    if let Mode::Exec { ref container_id, ref input, interactive } = self.mode {
+                        (container_id.clone(), input.trim().to_string(), interactive)
+                    } else {
+                        return Ok(false);
+                    };
+                let cmd = if raw.is_empty() { "sh".to_string() } else { raw };
+                self.exec_history.reset_cursor();
+                self.exec_history.push(cmd.clone());
+                self.mode = Mode::Normal;
+                self.pending_exec = Some((container_id, cmd, interactive));
+            }
+            Action::ToggleFollow => {
+                // Tab key: toggle interactive ↔ one-shot
+                if let Mode::Exec { ref mut interactive, .. } = self.mode {
+                    *interactive = !*interactive;
+                }
+            }
+            Action::Char(c) => {
+                self.exec_history.reset_cursor();
+                if let Mode::Exec { ref mut input, .. } = self.mode {
+                    input.push(c);
+                }
+            }
+            Action::Backspace => {
+                if let Mode::Exec { ref mut input, .. } = self.mode {
+                    input.pop();
+                }
+            }
+            Action::HistoryPrev => {
+                let current = if let Mode::Exec { ref input, .. } = self.mode {
+                    input.clone()
+                } else {
+                    String::new()
+                };
+                if let Some(entry) = self.exec_history.prev(&current) {
+                    let entry = entry.to_string();
+                    if let Mode::Exec { ref mut input, .. } = self.mode {
+                        *input = entry;
+                    }
+                }
+            }
+            Action::HistoryNext => {
+                if let Some(entry) = self.exec_history.next() {
+                    let entry = entry.to_string();
+                    if let Mode::Exec { ref mut input, .. } = self.mode {
+                        *input = entry;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
     }
 
     fn dispatch_visual(&mut self, action: Action, anchor: usize, cursor: usize) -> Result<bool> {

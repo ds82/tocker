@@ -11,7 +11,11 @@ pub struct History {
 
 impl History {
     pub fn load() -> Self {
-        let path = history_path();
+        Self::load_named("history")
+    }
+
+    pub fn load_named(filename: &str) -> Self {
+        let path = history_dir().join(filename);
         let entries = if path.exists() {
             std::fs::read_to_string(&path)
                 .unwrap_or_default()
@@ -24,6 +28,10 @@ impl History {
         };
         let cursor = entries.len();
         Self { entries, cursor, fresh_input: String::new(), path }
+    }
+
+    pub fn last(&self) -> Option<&str> {
+        self.entries.last().map(|s| s.as_str())
     }
 
     pub fn push(&mut self, cmd: String) {
@@ -82,7 +90,7 @@ impl History {
     }
 }
 
-fn history_path() -> PathBuf {
+fn history_dir() -> PathBuf {
     let base = std::env::var("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -90,5 +98,5 @@ fn history_path() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".local").join("share"))
                 .unwrap_or_else(|_| PathBuf::from("."))
         });
-    base.join("tocker").join("history")
+    base.join("tocker")
 }

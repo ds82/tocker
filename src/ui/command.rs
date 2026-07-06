@@ -36,6 +36,9 @@ pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
         Mode::Yank => {
             Span::styled(" [yank] ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
         }
+        Mode::Exec { .. } => {
+            Span::styled(" [exec] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        }
     };
 
     let section = Span::styled(
@@ -90,6 +93,25 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("Esc/Tab", Style::default().fg(Color::DarkGray)),
             Span::raw(" close"),
         ]),
+
+        Mode::Exec { input, interactive, .. } => {
+            let (mode_label, mode_color) = if *interactive {
+                ("interactive", Color::Green)
+            } else {
+                ("one-shot", Color::Yellow)
+            };
+            Line::from(vec![
+                Span::styled("exec ", Style::default().fg(Color::Green)),
+                Span::styled("[", Style::default().fg(Color::DarkGray)),
+                Span::styled(mode_label, Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
+                Span::styled("]", Style::default().fg(Color::DarkGray)),
+                Span::styled(": ", Style::default().fg(Color::Green)),
+                Span::raw(input.as_str()),
+                Span::styled("█", Style::default().fg(Color::Green)),
+                Span::styled("  Tab", Style::default().fg(Color::DarkGray)),
+                Span::raw(" toggle"),
+            ])
+        }
 
         Mode::Yank => {
             let (key_i_label, key_d_label) = match app.section {

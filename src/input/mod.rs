@@ -47,6 +47,7 @@ pub fn map_key(mode: &Mode, key: KeyEvent) -> Action {
         Mode::Menu { .. } => map_menu(key),
         Mode::Visual { .. } => map_visual(key),
         Mode::Yank => map_yank(key),
+        Mode::Exec { .. } => map_exec_input(key),
     }
 }
 
@@ -127,6 +128,13 @@ fn map_filter_input(key: KeyEvent) -> Action {
         KeyCode::Backspace => Action::Backspace,
         KeyCode::Char(c) => Action::Char(c),
         _ => Action::None,
+    }
+}
+
+fn map_exec_input(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Tab => Action::ToggleFollow, // toggle interactive/one-shot
+        _ => map_command_input(key),
     }
 }
 

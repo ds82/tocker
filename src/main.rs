@@ -85,8 +85,8 @@ where
                             app.needs_refresh = false;
                             app.refresh_current_section().await;
                         }
-                        if let Some(id) = app.pending_exec.take() {
-                            exec_container(&id, terminal).await?;
+                        if let Some((id, cmd, interactive)) = app.pending_exec.take() {
+                            exec_container(&id, &cmd, interactive, terminal).await?;
                             app.refresh_containers().await;
                         }
                     }
@@ -121,21 +121,33 @@ where
     Ok(())
 }
 
-async fn exec_container<B>(id: &str, terminal: &mut Terminal<B>) -> Result<()>
+async fn exec_container<B>(
+    id: &str,
+    cmd: &str,
+    interactive: bool,
+    terminal: &mut Terminal<B>,
+) -> Result<()>
 where
     B: ratatui::backend::Backend + std::io::Write,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    // Hand over the terminal to docker exec
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
+    let cmd_args: Vec<&str> = cmd.split_whitespace().collect();
+    let docker_flags: &[&str] = if interactive { &["exec", "-it"] } else { &["exec"] };
     let _ = tokio::process::Command::new("docker")
-        .args(["exec", "-it", id, "sh"])
+        .args(docker_flags)
+        .arg(id)
+        .args(&cmd_args)
         .status()
         .await;
 
-    // Restore TUI
+    print!("\n[press enter to return]");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let mut buf = String::new();
+    let _ = std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut buf);
+
     enable_raw_mode()?;
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
     terminal.clear()?;
