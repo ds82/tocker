@@ -34,7 +34,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, scroll: usize, follow: bool)
     let start = if total <= view_height {
         0
     } else {
-        scroll.saturating_sub(view_height.saturating_sub(1)).min(total - view_height)
+        scroll
+            .saturating_sub(view_height.saturating_sub(1))
+            .min(total - view_height)
     };
     let end = (start + view_height).min(total);
 
@@ -55,10 +57,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, scroll: usize, follow: bool)
     // Status bar
     let hints = Span::raw("  j/k scroll  f follow  G tail  q close");
     let status_line = Line::from(vec![
-        Span::styled(" [log] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " [log] ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         hints,
     ]);
-    let status = Paragraph::new(status_line)
-        .style(Style::default().bg(Color::DarkGray));
+    let status = Paragraph::new(status_line).style(Style::default().bg(Color::DarkGray));
     f.render_widget(status, chunks[1]);
 }

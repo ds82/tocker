@@ -27,7 +27,12 @@ impl History {
             Vec::new()
         };
         let cursor = entries.len();
-        Self { entries, cursor, fresh_input: String::new(), path }
+        Self {
+            entries,
+            cursor,
+            fresh_input: String::new(),
+            path,
+        }
     }
 
     pub fn last(&self) -> Option<&str> {

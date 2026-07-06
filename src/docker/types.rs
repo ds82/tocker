@@ -1,4 +1,6 @@
-use bollard::models::{ContainerSummary, ImageSummary, Network as BollardNetwork, Volume as BollardVolume};
+use bollard::models::{
+    ContainerSummary, ImageSummary, Network as BollardNetwork, Volume as BollardVolume,
+};
 
 // ── Containers ──────────────────────────────────────────────────────────────
 
@@ -80,7 +82,16 @@ impl From<ContainerSummary> for Container {
             .and_then(|l| l.get("com.docker.compose.project"))
             .cloned();
 
-        Self { id, full_id, name, image, state, status_text, ports, compose_project }
+        Self {
+            id,
+            full_id,
+            name,
+            image,
+            state,
+            status_text,
+            ports,
+            compose_project,
+        }
     }
 }
 
@@ -146,10 +157,7 @@ pub struct Volume {
 
 impl From<BollardVolume> for Volume {
     fn from(v: BollardVolume) -> Self {
-        let scope = v
-            .scope
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+        let scope = v.scope.map(|s| s.to_string()).unwrap_or_default();
 
         Self {
             name: v.name,
@@ -185,7 +193,13 @@ impl From<BollardNetwork> for Network {
             .and_then(|cfg| cfg.subnet)
             .unwrap_or_default();
 
-        Self { id, name, driver, scope, subnet }
+        Self {
+            id,
+            name,
+            driver,
+            scope,
+            subnet,
+        }
     }
 }
 

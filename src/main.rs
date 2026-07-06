@@ -139,7 +139,11 @@ where
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
     let cmd_args: Vec<&str> = cmd.split_whitespace().collect();
-    let docker_flags: &[&str] = if interactive { &["exec", "-it"] } else { &["exec"] };
+    let docker_flags: &[&str] = if interactive {
+        &["exec", "-it"]
+    } else {
+        &["exec"]
+    };
     let _ = tokio::process::Command::new("docker")
         .args(docker_flags)
         .arg(id)

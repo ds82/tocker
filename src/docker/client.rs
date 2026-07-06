@@ -42,7 +42,10 @@ impl SshTunnel {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
 
-        Ok(Self { _child: child, socket_path })
+        Ok(Self {
+            _child: child,
+            socket_path,
+        })
     }
 }
 
