@@ -12,6 +12,7 @@ pub struct Container {
     pub state: ContainerState,
     pub status_text: String,
     pub ports: String,
+    pub compose_project: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,7 +74,13 @@ impl From<ContainerSummary> for Container {
             .collect::<Vec<_>>()
             .join(" ");
 
-        Self { id, full_id, name, image, state, status_text, ports }
+        let compose_project = s
+            .labels
+            .as_ref()
+            .and_then(|l| l.get("com.docker.compose.project"))
+            .cloned();
+
+        Self { id, full_id, name, image, state, status_text, ports, compose_project }
     }
 }
 

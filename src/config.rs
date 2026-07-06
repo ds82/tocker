@@ -1,10 +1,13 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use crate::theme::ThemeConfig;
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub general: GeneralConfig,
+    pub theme: ThemeConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -16,7 +19,7 @@ pub struct GeneralConfig {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { general: GeneralConfig::default() }
+        Self { general: GeneralConfig::default(), theme: ThemeConfig::default() }
     }
 }
 

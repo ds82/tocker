@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use ratatui::{
     layout::{Alignment, Constraint, Rect},
     style::{Color, Modifier, Style},
@@ -6,8 +8,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Mode, Section};
-use crate::docker::types::ContainerState;
+use crate::app::{App, Section};
+use crate::docker::types::{Container, ContainerState};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     match app.section {
@@ -25,16 +27,44 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
     let visual_range = app.visual_range();
     let table_selected = app.visual_cursor().unwrap_or(app.selected);
 
+    let groups = build_container_groups(&visible);
+
+    // Compute which display row (including headers) corresponds to table_selected
+    let mut display_selected = table_selected;
+    let mut containers_seen: usize = 0;
+    for group in &groups {
+        if group.project.is_some() && containers_seen <= table_selected {
+            display_selected += 1;
+        }
+        containers_seen += group.containers.len();
+    }
+
     let header = bold_header(&["NAME", "IMAGE", "STATUS", "PORTS"]);
 
-    let rows: Vec<Row> = visible
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
+    let mut rows: Vec<Row> = Vec::new();
+    let mut container_idx: usize = 0;
+
+    for group in &groups {
+        if let Some(ref proj) = group.project {
+            rows.push(
+                Row::new(vec![
+                    Cell::from(format!(" ▸ {proj}"))
+                        .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                ])
+                .style(Style::default().bg(Color::Reset)),
+            );
+        }
+
+        for c in &group.containers {
             let state_style = match c.state {
-                ContainerState::Running => Style::default().fg(Color::Green),
-                ContainerState::Paused | ContainerState::Restarting => Style::default().fg(Color::Yellow),
-                _ => Style::default().fg(Color::Red),
+                ContainerState::Running => Style::default().fg(app.theme.status_running),
+                ContainerState::Paused | ContainerState::Restarting => {
+                    Style::default().fg(app.theme.status_paused)
+                }
+                _ => Style::default().fg(app.theme.status_exited),
             };
             let row = Row::new(vec![
                 Cell::from(c.name.as_str()),
@@ -42,23 +72,26 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
                 Cell::from(Span::styled(c.status_text.as_str(), state_style)),
                 Cell::from(c.ports.as_str()),
             ]);
-            // Apply visual range background for rows inside the selection
-            if let Some((lo, hi)) = visual_range {
-                if i >= lo && i <= hi {
-                    return row.style(Style::default().bg(Color::Blue));
+            let row = if let Some((lo, hi)) = visual_range {
+                if container_idx >= lo && container_idx <= hi {
+                    row.style(Style::default().bg(Color::Blue))
+                } else {
+                    row
                 }
-            }
-            row
-        })
-        .collect();
+            } else {
+                row
+            };
+            rows.push(row);
+            container_idx += 1;
+        }
+    }
 
-    let title = section_title("Containers", visible.len(), app.containers.len(), &app.mode);
+    let title = section_title("Containers", visible.len(), app.containers.len(), app);
 
     let hl_style = if visual_range.is_some() {
-        // In visual mode: cursor row stands out from the range with bright yellow
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD).bg(Color::Blue)
     } else {
-        highlight_style()
+        Style::default().bg(app.theme.selected_bg).add_modifier(Modifier::BOLD)
     };
 
     let table = Table::new(
@@ -69,7 +102,35 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
     .row_highlight_style(hl_style)
     .block(panel_block(title));
 
-    render_table(f, area, table, table_selected, visible.is_empty());
+    render_table(f, area, table, display_selected, visible.is_empty());
+}
+
+struct ContainerGroup<'a> {
+    project: Option<String>,
+    containers: Vec<&'a Container>,
+}
+
+fn build_container_groups<'a>(containers: &[&'a Container]) -> Vec<ContainerGroup<'a>> {
+    let mut by_project: BTreeMap<String, Vec<&Container>> = BTreeMap::new();
+    let mut ungrouped: Vec<&Container> = Vec::new();
+
+    for c in containers {
+        match &c.compose_project {
+            Some(proj) => by_project.entry(proj.clone()).or_default().push(c),
+            None => ungrouped.push(c),
+        }
+    }
+
+    let mut groups: Vec<ContainerGroup> = by_project
+        .into_iter()
+        .map(|(project, containers)| ContainerGroup { project: Some(project), containers })
+        .collect();
+
+    if !ungrouped.is_empty() {
+        groups.push(ContainerGroup { project: None, containers: ungrouped });
+    }
+
+    groups
 }
 
 // ── Images ────────────────────────────────────────────────────────────────────
@@ -92,7 +153,7 @@ fn render_images(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let title = section_title("Images", visible.len(), app.images.len(), &app.mode);
+    let title = section_title("Images", visible.len(), app.images.len(), app);
 
     let table = Table::new(
         rows,
@@ -105,7 +166,7 @@ fn render_images(f: &mut Frame, area: Rect, app: &App) {
         ],
     )
     .header(header)
-    .row_highlight_style(highlight_style())
+    .row_highlight_style(highlight_style(app))
     .block(panel_block(title));
 
     render_table(f, area, table, app.selected, visible.is_empty());
@@ -130,7 +191,7 @@ fn render_volumes(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let title = section_title("Volumes", visible.len(), app.volumes.len(), &app.mode);
+    let title = section_title("Volumes", visible.len(), app.volumes.len(), app);
 
     let table = Table::new(
         rows,
@@ -142,7 +203,7 @@ fn render_volumes(f: &mut Frame, area: Rect, app: &App) {
         ],
     )
     .header(header)
-    .row_highlight_style(highlight_style())
+    .row_highlight_style(highlight_style(app))
     .block(panel_block(title));
 
     render_table(f, area, table, app.selected, visible.is_empty());
@@ -167,7 +228,7 @@ fn render_networks(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let title = section_title("Networks", visible.len(), app.networks.len(), &app.mode);
+    let title = section_title("Networks", visible.len(), app.networks.len(), app);
 
     let table = Table::new(
         rows,
@@ -179,7 +240,7 @@ fn render_networks(f: &mut Frame, area: Rect, app: &App) {
         ],
     )
     .header(header)
-    .row_highlight_style(highlight_style())
+    .row_highlight_style(highlight_style(app))
     .block(panel_block(title));
 
     render_table(f, area, table, app.selected, visible.is_empty());
@@ -197,8 +258,8 @@ fn bold_header<'a>(cols: &[&'a str]) -> Row<'a> {
     .height(1)
 }
 
-fn highlight_style() -> Style {
-    Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+fn highlight_style(app: &App) -> Style {
+    Style::default().bg(app.theme.selected_bg).add_modifier(Modifier::BOLD)
 }
 
 fn panel_block(title: String) -> Block<'static> {
@@ -208,13 +269,12 @@ fn panel_block(title: String) -> Block<'static> {
         .title(title)
 }
 
-fn section_title(name: &str, visible: usize, total: usize, mode: &Mode) -> String {
-    if let Mode::Filter(ref q) = mode {
-        if !q.is_empty() {
-            return format!(" {name} ({visible}/{total}) ");
-        }
+fn section_title(name: &str, visible: usize, total: usize, app: &App) -> String {
+    if !app.filter.is_empty() {
+        format!(" {name} ({visible}/{total}) ")
+    } else {
+        format!(" {name} ({total}) ")
     }
-    format!(" {name} ({total}) ")
 }
 
 fn render_table(f: &mut Frame, area: Rect, table: Table, selected: usize, empty: bool) {

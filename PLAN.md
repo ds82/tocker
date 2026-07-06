@@ -276,11 +276,11 @@ exec = "e"
 
 ### Phase 4 — Polish
 
-- [ ] Help overlay (`?`)
-- [ ] Detail / inspect panel
-- [ ] Error display (non-fatal toasts, fatal full-screen)
-- [ ] Theme customization
-- [ ] Docker Compose awareness (group containers by compose project)
+- [x] Help overlay (`?`) — full keybinding reference in a scrollable popup
+- [x] Detail / inspect panel (`K`) — key/value overlay for selected item
+- [x] Error display — failed commands auto-clear after 5 s
+- [x] Theme customization — `[theme]` in config.toml (selected_bg, status_running/exited/paused)
+- [x] Docker Compose awareness — containers grouped by `com.docker.compose.project` label
 
 ---
 

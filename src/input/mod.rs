@@ -34,6 +34,8 @@ pub enum Action {
     YankName,
     YankSecondary,
     YankId,
+    OpenHelp,
+    Inspect,
     None,
 }
 
@@ -48,6 +50,8 @@ pub fn map_key(mode: &Mode, key: KeyEvent) -> Action {
         Mode::Visual { .. } => map_visual(key),
         Mode::Yank => map_yank(key),
         Mode::Exec { .. } => map_exec_input(key),
+        Mode::Help { .. } => map_overlay(key),
+        Mode::Inspect { .. } => map_overlay(key),
     }
 }
 
@@ -72,6 +76,8 @@ fn map_normal(key: KeyEvent) -> Action {
         (KeyCode::Char('/'), _) => Action::EnterFilter,
         (KeyCode::Tab, _) => Action::OpenMenu,
         (KeyCode::Esc, _) => Action::Escape,
+        (KeyCode::Char('?'), _) => Action::OpenHelp,
+        (KeyCode::Char('K'), _) => Action::Inspect,
         _ => Action::None,
     }
 }
@@ -128,6 +134,17 @@ fn map_filter_input(key: KeyEvent) -> Action {
         KeyCode::Enter => Action::Enter,
         KeyCode::Backspace => Action::Backspace,
         KeyCode::Char(c) => Action::Char(c),
+        _ => Action::None,
+    }
+}
+
+fn map_overlay(key: KeyEvent) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => Action::Escape,
+        (KeyCode::Char('?'), _) => Action::OpenHelp,
+        (KeyCode::Char('K'), _) => Action::Inspect,
+        (KeyCode::Char('j'), _) | (KeyCode::Down, _) => Action::MoveDown,
+        (KeyCode::Char('k'), _) | (KeyCode::Up, _) => Action::MoveUp,
         _ => Action::None,
     }
 }

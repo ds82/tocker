@@ -39,6 +39,12 @@ pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
         Mode::Exec { .. } => {
             Span::styled(" [exec] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
         }
+        Mode::Help { .. } => {
+            Span::styled(" [help] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        }
+        Mode::Inspect { .. } => {
+            Span::styled(" [inspect] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        }
     };
 
     let section = Span::styled(
@@ -98,6 +104,20 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
             Span::styled("Enter", Style::default().fg(Color::Yellow)),
             Span::raw(" select  "),
             Span::styled("Esc/Tab", Style::default().fg(Color::DarkGray)),
+            Span::raw(" close"),
+        ]),
+
+        Mode::Help { .. } => Line::from(vec![
+            Span::styled("  j/k", Style::default().fg(Color::DarkGray)),
+            Span::raw(" scroll  "),
+            Span::styled("?  Esc  q", Style::default().fg(Color::DarkGray)),
+            Span::raw(" close"),
+        ]),
+
+        Mode::Inspect { .. } => Line::from(vec![
+            Span::styled("  j/k", Style::default().fg(Color::DarkGray)),
+            Span::raw(" scroll  "),
+            Span::styled("K  Esc", Style::default().fg(Color::DarkGray)),
             Span::raw(" close"),
         ]),
 

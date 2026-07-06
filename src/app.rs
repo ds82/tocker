@@ -13,6 +13,7 @@ use crate::docker::client::SshTunnel;
 use crate::docker::types::{Container, ContainerState, Image, Network, Volume};
 use crate::history::History;
 use crate::input::{map_key, Action};
+use crate::theme::Theme;
 
 // ── Section ───────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,8 @@ pub enum Mode {
     Visual { anchor: usize, cursor: usize },
     Yank,
     Exec { container_id: String, input: String, interactive: bool },
+    Help { scroll: usize },
+    Inspect { scroll: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,10 +136,14 @@ pub struct App {
     // Command history
     history: History,
     exec_history: History,
+    // Status toast — auto-clears after expiry
+    pub status_expires: Option<std::time::Instant>,
+    // Theme (resolved from config)
+    pub theme: Theme,
 }
 
 impl App {
-    pub fn new(docker: Docker, tunnel: Option<SshTunnel>, default_section: Section) -> Self {
+    pub fn new(docker: Docker, tunnel: Option<SshTunnel>, default_section: Section, theme: Theme) -> Self {
         let (msg_tx, msg_rx) = mpsc::channel(256);
         Self {
             docker: Arc::new(docker),
@@ -161,6 +168,8 @@ impl App {
             spinner_label: String::new(),
             history: History::load(),
             exec_history: History::load_named("exec_history"),
+            status_expires: None,
+            theme,
         }
     }
 
@@ -345,6 +354,7 @@ impl App {
         match result {
             CmdResult::Done { refresh } => {
                 self.status = None;
+                self.status_expires = None;
                 match refresh {
                     Section::Containers => self.refresh_containers().await,
                     Section::Images => self.refresh_images().await,
@@ -354,6 +364,72 @@ impl App {
             }
             CmdResult::Failed { message } => {
                 self.status = Some(message);
+                self.status_expires = Some(
+                    std::time::Instant::now() + std::time::Duration::from_secs(5),
+                );
+            }
+        }
+    }
+
+    /// Clear status if the toast has expired.
+    pub fn maybe_clear_status(&mut self) {
+        if let Some(exp) = self.status_expires {
+            if std::time::Instant::now() >= exp {
+                self.status = None;
+                self.status_expires = None;
+            }
+        }
+    }
+
+    /// Build key-value pairs describing the selected item for the inspect overlay.
+    pub fn inspect_lines(&self) -> Vec<(&'static str, String)> {
+        match self.section {
+            Section::Containers => {
+                let Some(c) = self.selected_container() else { return vec![] };
+                let mut lines = vec![
+                    ("Name",   c.name.clone()),
+                    ("ID",     c.full_id.chars().take(12).collect()),
+                    ("Full ID",c.full_id.clone()),
+                    ("Image",  c.image.clone()),
+                    ("State",  format!("{:?}", c.state).to_lowercase()),
+                    ("Status", c.status_text.clone()),
+                ];
+                if !c.ports.is_empty() {
+                    lines.push(("Ports", c.ports.clone()));
+                }
+                if let Some(ref proj) = c.compose_project {
+                    lines.push(("Compose", proj.clone()));
+                }
+                lines
+            }
+            Section::Images => {
+                let Some(img) = self.selected_image() else { return vec![] };
+                vec![
+                    ("Repository", img.repository.clone()),
+                    ("Tag",        img.tag.clone()),
+                    ("ID",         img.id.clone()),
+                    ("Size",       img.size.clone()),
+                    ("Created",    img.created.clone()),
+                ]
+            }
+            Section::Volumes => {
+                let Some(v) = self.selected_volume() else { return vec![] };
+                vec![
+                    ("Name",       v.name.clone()),
+                    ("Driver",     v.driver.clone()),
+                    ("Scope",      v.scope.clone()),
+                    ("Mountpoint", v.mountpoint.clone()),
+                ]
+            }
+            Section::Networks => {
+                let Some(n) = self.selected_network() else { return vec![] };
+                vec![
+                    ("Name",   n.name.clone()),
+                    ("ID",     n.id.chars().take(12).collect()),
+                    ("Driver", n.driver.clone()),
+                    ("Scope",  n.scope.clone()),
+                    ("Subnet", n.subnet.clone()),
+                ]
             }
         }
     }
@@ -430,6 +506,8 @@ impl App {
             Mode::Visual { anchor, cursor } => self.dispatch_visual(action, anchor, cursor),
             Mode::Yank => self.dispatch_yank(action),
             Mode::Exec { .. } => self.dispatch_exec(action),
+            Mode::Help { .. } => self.dispatch_help(action),
+            Mode::Inspect { .. } => self.dispatch_inspect(action),
         }
     }
 
@@ -510,6 +588,8 @@ impl App {
             }
             Action::OpenMenu => self.mode = Mode::Menu { cursor: self.section.index() },
             Action::EnterYank => self.mode = Mode::Yank,
+            Action::OpenHelp => self.mode = Mode::Help { scroll: 0 },
+            Action::Inspect => self.mode = Mode::Inspect { scroll: 0 },
             _ => {}
         }
         Ok(false)
@@ -616,6 +696,38 @@ impl App {
                     if let Mode::Exec { ref mut input, .. } = self.mode {
                         *input = entry;
                     }
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn dispatch_help(&mut self, action: Action) -> Result<bool> {
+        match action {
+            Action::Escape | Action::OpenHelp => self.mode = Mode::Normal,
+            Action::MoveDown => {
+                if let Mode::Help { ref mut scroll } = self.mode { *scroll += 1; }
+            }
+            Action::MoveUp => {
+                if let Mode::Help { ref mut scroll } = self.mode {
+                    *scroll = scroll.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn dispatch_inspect(&mut self, action: Action) -> Result<bool> {
+        match action {
+            Action::Escape | Action::Inspect => self.mode = Mode::Normal,
+            Action::MoveDown => {
+                if let Mode::Inspect { ref mut scroll } = self.mode { *scroll += 1; }
+            }
+            Action::MoveUp => {
+                if let Mode::Inspect { ref mut scroll } = self.mode {
+                    *scroll = scroll.saturating_sub(1);
                 }
             }
             _ => {}

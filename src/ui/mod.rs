@@ -6,6 +6,8 @@ use ratatui::{
 use crate::app::{App, Mode};
 
 mod command;
+mod help;
+mod inspect;
 mod list;
 mod logs;
 mod menu;
@@ -31,5 +33,13 @@ pub fn render(f: &mut Frame, app: &App) {
 
     if let Mode::Menu { cursor } = app.mode {
         menu::render(f, area, cursor, app.section);
+    }
+
+    if let Mode::Help { scroll } = app.mode {
+        help::render(f, area, scroll);
+    }
+
+    if let Mode::Inspect { scroll } = app.mode {
+        inspect::render(f, area, app, scroll);
     }
 }

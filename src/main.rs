@@ -12,6 +12,7 @@ mod config;
 mod docker;
 mod history;
 mod input;
+mod theme;
 mod ui;
 
 #[tokio::main]
@@ -35,7 +36,8 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let default_section = app::Section::from_str(&cfg.general.default_section);
-    let mut app = app::App::new(docker, tunnel, default_section);
+    let theme = theme::Theme::from(&cfg.theme);
+    let mut app = app::App::new(docker, tunnel, default_section, theme);
     let result = run(&mut terminal, &mut app, cfg.general.refresh_interval_ms).await;
 
     disable_raw_mode()?;
@@ -72,6 +74,7 @@ where
     app.refresh_current_section().await;
 
     loop {
+        app.maybe_clear_status();
         terminal.draw(|f| ui::render(f, app))?;
 
         tokio::select! {
