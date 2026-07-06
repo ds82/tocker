@@ -48,8 +48,11 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
         if let Some(ref proj) = group.project {
             rows.push(
                 Row::new(vec![
-                    Cell::from(format!(" ▸ {proj}"))
-                        .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+                    Cell::from(format!(" ▸ {proj}")).style(
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Cell::from(""),
                     Cell::from(""),
                     Cell::from(""),
@@ -68,7 +71,11 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
                 _ => Style::default().fg(app.theme.status_exited),
             };
             let name_cell = if group.project.is_some() {
-                let symbol = if j == count - 1 { " └─ " } else { " ├─ " };
+                let symbol = if j == count - 1 {
+                    " └─ "
+                } else {
+                    " ├─ "
+                };
                 Cell::from(Line::from(vec![
                     Span::styled(symbol, Style::default().fg(Color::DarkGray)),
                     Span::raw(c.name.clone()),
@@ -99,14 +106,24 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
     let title = section_title("Containers", visible.len(), app.containers.len(), app);
 
     let hl_style = if visual_range.is_some() {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD).bg(Color::Blue)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+            .bg(Color::Blue)
     } else {
-        Style::default().bg(app.theme.selected_bg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .bg(app.theme.selected_bg)
+            .add_modifier(Modifier::BOLD)
     };
 
     let table = Table::new(
         rows,
-        [Constraint::Length(24), Constraint::Fill(1), Constraint::Length(20), Constraint::Length(22)],
+        [
+            Constraint::Length(24),
+            Constraint::Fill(1),
+            Constraint::Length(20),
+            Constraint::Length(22),
+        ],
     )
     .header(header)
     .row_highlight_style(hl_style)
@@ -133,11 +150,17 @@ fn build_container_groups<'a>(containers: &[&'a Container]) -> Vec<ContainerGrou
 
     let mut groups: Vec<ContainerGroup> = by_project
         .into_iter()
-        .map(|(project, containers)| ContainerGroup { project: Some(project), containers })
+        .map(|(project, containers)| ContainerGroup {
+            project: Some(project),
+            containers,
+        })
         .collect();
 
     if !ungrouped.is_empty() {
-        groups.push(ContainerGroup { project: None, containers: ungrouped });
+        groups.push(ContainerGroup {
+            project: None,
+            containers: ungrouped,
+        });
     }
 
     groups
@@ -269,7 +292,9 @@ fn bold_header<'a>(cols: &[&'a str]) -> Row<'a> {
 }
 
 fn highlight_style(app: &App) -> Style {
-    Style::default().bg(app.theme.selected_bg).add_modifier(Modifier::BOLD)
+    Style::default()
+        .bg(app.theme.selected_bg)
+        .add_modifier(Modifier::BOLD)
 }
 
 fn panel_block(title: String) -> Block<'static> {

@@ -15,12 +15,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, scroll: usize) {
     }
 
     let key_width = lines_data.iter().map(|(k, _)| k.len()).max().unwrap_or(8) + 2;
-    let content_width = lines_data
-        .iter()
-        .map(|(_, v)| v.len())
-        .max()
-        .unwrap_or(20);
-    let width = (key_width + content_width + 4).max(40).min(area.width as usize - 4) as u16;
+    let content_width = lines_data.iter().map(|(_, v)| v.len()).max().unwrap_or(20);
+    let width = (key_width + content_width + 4)
+        .max(40)
+        .min(area.width as usize - 4) as u16;
     let height = (lines_data.len() + 2).min(area.height as usize - 4) as u16;
 
     let popup = centered_rect(width, height, area);
@@ -31,7 +29,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, scroll: usize) {
             Line::from(vec![
                 Span::styled(
                     format!("  {k:<key_width$}"),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(v),
             ])

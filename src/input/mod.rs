@@ -159,9 +159,9 @@ fn map_exec_input(key: KeyEvent) -> Action {
 fn map_yank(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => Action::Escape,
-        KeyCode::Char('y') => Action::YankName,      // yy → name
+        KeyCode::Char('y') => Action::YankName, // yy → name
         KeyCode::Char('i') => Action::YankSecondary, // yi → image / ID / mountpoint / subnet
-        KeyCode::Char('d') => Action::YankId,        // yd → full container/image ID
+        KeyCode::Char('d') => Action::YankId,   // yd → full container/image ID
         _ => Action::Escape,
     }
 }

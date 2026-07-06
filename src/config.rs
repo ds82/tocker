@@ -19,7 +19,10 @@ pub struct GeneralConfig {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { general: GeneralConfig::default(), theme: ThemeConfig::default() }
+        Self {
+            general: GeneralConfig::default(),
+            theme: ThemeConfig::default(),
+        }
     }
 }
 

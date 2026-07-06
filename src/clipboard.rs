@@ -20,8 +20,16 @@ fn base64(data: &[u8]) -> String {
         let b2 = if n > 2 { chunk[2] } else { 0 };
         out.push(CHARS[(b0 >> 2) as usize] as char);
         out.push(CHARS[(((b0 & 3) << 4) | (b1 >> 4)) as usize] as char);
-        if n > 1 { out.push(CHARS[(((b1 & 0xf) << 2) | (b2 >> 6)) as usize] as char); } else { out.push('='); }
-        if n > 2 { out.push(CHARS[(b2 & 0x3f) as usize] as char); } else { out.push('='); }
+        if n > 1 {
+            out.push(CHARS[(((b1 & 0xf) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if n > 2 {
+            out.push(CHARS[(b2 & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
     }
     out
 }

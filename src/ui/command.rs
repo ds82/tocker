@@ -12,44 +12,77 @@ const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧
 
 pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
     let mode_label = match &app.mode {
-        Mode::Normal => {
-            Span::styled(" [normal] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-        }
-        Mode::Command(_) => {
-            Span::styled(" [command] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        }
-        Mode::Filter(_) => {
-            Span::styled(" [filter] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        }
-        Mode::Log { .. } => {
-            Span::styled(" [log] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
-        }
-        Mode::Confirm(_) => {
-            Span::styled(" [confirm] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-        }
-        Mode::Menu { .. } => {
-            Span::styled(" [menu] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        }
-        Mode::Visual { .. } => {
-            Span::styled(" [visual] ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
-        }
-        Mode::Yank => {
-            Span::styled(" [yank] ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
-        }
-        Mode::Exec { .. } => {
-            Span::styled(" [exec] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-        }
-        Mode::Help { .. } => {
-            Span::styled(" [help] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        }
-        Mode::Inspect { .. } => {
-            Span::styled(" [inspect] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        }
+        Mode::Normal => Span::styled(
+            " [normal] ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Command(_) => Span::styled(
+            " [command] ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Filter(_) => Span::styled(
+            " [filter] ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Log { .. } => Span::styled(
+            " [log] ",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Confirm(_) => Span::styled(
+            " [confirm] ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Mode::Menu { .. } => Span::styled(
+            " [menu] ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Visual { .. } => Span::styled(
+            " [visual] ",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Yank => Span::styled(
+            " [yank] ",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Exec { .. } => Span::styled(
+            " [exec] ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Help { .. } => Span::styled(
+            " [help] ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Mode::Inspect { .. } => Span::styled(
+            " [inspect] ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
     };
 
     let section = Span::styled(
         app.section.label(),
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     );
 
     let right = Span::styled(" tocker ", Style::default().fg(Color::DarkGray));
@@ -57,7 +90,12 @@ pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
     let mut spans = vec![mode_label, section];
     if !app.filter.is_empty() {
         spans.push(Span::styled("  / ", Style::default().fg(Color::Cyan)));
-        spans.push(Span::styled(app.filter.as_str(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            app.filter.as_str(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     spans.push(right);
 
@@ -92,7 +130,10 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
                 }
             };
             Line::from(vec![
-                Span::styled(" ! ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " ! ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(label),
             ])
         }
@@ -121,7 +162,9 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
             Span::raw(" close"),
         ]),
 
-        Mode::Exec { input, interactive, .. } => {
+        Mode::Exec {
+            input, interactive, ..
+        } => {
             let (mode_label, mode_color) = if *interactive {
                 ("interactive", Color::Green)
             } else {
@@ -130,7 +173,10 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
             Line::from(vec![
                 Span::styled("exec ", Style::default().fg(Color::Green)),
                 Span::styled("[", Style::default().fg(Color::DarkGray)),
-                Span::styled(mode_label, Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    mode_label,
+                    Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled("]", Style::default().fg(Color::DarkGray)),
                 Span::styled(": ", Style::default().fg(Color::Green)),
                 Span::raw(input.as_str()),
@@ -171,7 +217,9 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
                 Span::raw("  "),
                 Span::styled(
                     format!("{count} selected"),
-                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
                 Span::styled("j/k", Style::default().fg(Color::Magenta)),
@@ -198,7 +246,9 @@ pub fn render_statusbar(f: &mut Frame, area: Rect, app: &App) {
                     Span::raw("  "),
                     Span::styled(
                         ch.to_string(),
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw("  "),
                     Span::styled(app.spinner_label.as_str(), Style::default().fg(Color::Cyan)),
