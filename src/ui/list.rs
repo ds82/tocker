@@ -58,7 +58,8 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
             );
         }
 
-        for c in &group.containers {
+        let count = group.containers.len();
+        for (j, c) in group.containers.iter().enumerate() {
             let state_style = match c.state {
                 ContainerState::Running => Style::default().fg(app.theme.status_running),
                 ContainerState::Paused | ContainerState::Restarting => {
@@ -66,8 +67,17 @@ fn render_containers(f: &mut Frame, area: Rect, app: &App) {
                 }
                 _ => Style::default().fg(app.theme.status_exited),
             };
+            let name_cell = if group.project.is_some() {
+                let symbol = if j == count - 1 { " └─ " } else { " ├─ " };
+                Cell::from(Line::from(vec![
+                    Span::styled(symbol, Style::default().fg(Color::DarkGray)),
+                    Span::raw(c.name.clone()),
+                ]))
+            } else {
+                Cell::from(c.name.as_str())
+            };
             let row = Row::new(vec![
-                Cell::from(c.name.as_str()),
+                name_cell,
                 Cell::from(c.image.as_str()),
                 Cell::from(Span::styled(c.status_text.as_str(), state_style)),
                 Cell::from(c.ports.as_str()),
