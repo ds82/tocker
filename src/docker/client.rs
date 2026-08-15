@@ -10,7 +10,7 @@ pub struct SshTunnel {
 impl SshTunnel {
     pub async fn establish(target: &str) -> Result<Self> {
         let host = target.strip_prefix("ssh://").unwrap_or(target);
-        let socket_path = format!("/tmp/tocker-{}.sock", std::process::id());
+        let socket_path = format!("/tmp/rocker-{}.sock", std::process::id());
         let _ = std::fs::remove_file(&socket_path);
 
         let child = tokio::process::Command::new("ssh")

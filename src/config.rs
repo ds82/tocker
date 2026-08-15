@@ -48,5 +48,5 @@ fn config_path() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".config"))
                 .unwrap_or_else(|_| PathBuf::from("."))
         });
-    base.join("tocker").join("config.toml")
+    base.join("rocker").join("config.toml")
 }

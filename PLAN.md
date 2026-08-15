@@ -1,4 +1,4 @@
-# tocker — Docker TUI Client
+# rocker — Docker TUI Client
 
 A vim-inspired terminal UI for Docker, built with Rust and Ratatui.
 
@@ -6,7 +6,7 @@ A vim-inspired terminal UI for Docker, built with Rust and Ratatui.
 
 ## Vision
 
-`tocker` feels like home for anyone who lives in Neovim. Modal navigation, mnemonic keybindings, command-line mode, and a composable layout. No mouse required. No surprises.
+`rocker` feels like home for anyone who lives in Neovim. Modal navigation, mnemonic keybindings, command-line mode, and a composable layout. No mouse required. No surprises.
 
 ---
 
@@ -14,7 +14,7 @@ A vim-inspired terminal UI for Docker, built with Rust and Ratatui.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ tocker                              [normal] containers (42)  │
+│ rocker                              [normal] containers (42)  │
 ├──────────┬──────────────────────────────────────────────────┤
 │ SIDEBAR  │ MAIN PANEL                                        │
 │          │                                                   │
@@ -121,7 +121,7 @@ Panels are resizable with `<` / `>`. Detail panel toggles with `K` (think `K` fo
 ## Architecture
 
 ```
-tocker/
+rocker/
 ├── src/
 │   ├── main.rs              Entry point, event loop
 │   ├── app.rs               App state, mode FSM
@@ -142,7 +142,7 @@ tocker/
 │   │   ├── mod.rs
 │   │   ├── keybindings.rs   Key → Action mapping
 │   │   └── command.rs       Command parser
-│   └── config.rs            Config file (~/.config/tocker/config.toml)
+│   └── config.rs            Config file (~/.config/rocker/config.toml)
 ├── Cargo.toml
 └── PLAN.md
 ```
@@ -157,7 +157,7 @@ tocker/
 | Terminal backend | `crossterm`                 | Cross-platform terminal control     |
 | Docker API       | `bollard`                   | Async Docker client (Unix socket)   |
 | Async runtime    | `tokio`                     | Multi-threaded, drives Docker calls |
-| Config           | `toml` + `serde`            | `~/.config/tocker/config.toml`      |
+| Config           | `toml` + `serde`            | `~/.config/rocker/config.toml`      |
 | Error handling   | `anyhow`                    | Ergonomic error propagation         |
 | Fuzzy filter     | `nucleo` or `fuzzy-matcher` | Fast in-process fuzzy search        |
 | PTY exec         | `portable-pty`              | Proper PTY for `e` exec-into-shell  |
@@ -202,7 +202,7 @@ Docker state is refreshed on a background interval. Log streaming uses a bounded
 Priority order (first match wins):
 
 1. `DOCKER_HOST` environment variable
-2. `[remote] host` in `~/.config/tocker/config.toml`
+2. `[remote] host` in `~/.config/rocker/config.toml`
 3. Local Unix socket (`/var/run/docker.sock`)
 
 ### `DOCKER_HOST` parsing
@@ -215,11 +215,11 @@ Priority order (first match wins):
 | `unix:///path/to/sock`       | Custom local socket             |
 | `tcp://hostname:port`        | Unencrypted TCP (Docker daemon) |
 
-A bare hostname (no scheme) is always treated as SSH — consistent with how you'd think of a remote box. `bollard`'s `ClientBuilder` handles the SSH tunnel; it reuses the system SSH agent and `~/.ssh/config` so no credentials need to be configured in tocker itself.
+A bare hostname (no scheme) is always treated as SSH — consistent with how you'd think of a remote box. `bollard`'s `ClientBuilder` handles the SSH tunnel; it reuses the system SSH agent and `~/.ssh/config` so no credentials need to be configured in rocker itself.
 
 ---
 
-## Config (`~/.config/tocker/config.toml`)
+## Config (`~/.config/rocker/config.toml`)
 
 ```toml
 [general]
@@ -269,8 +269,8 @@ exec = "e"
 - [x] Visual mode (multi-select with bulk start/stop/delete)
 - [x] Exec into container (`docker exec -it … sh` via subprocess)
 - [x] Filter with `/` (substring match, clears on Esc)
-- [x] Command history (`~/.local/share/tocker/history`, up/down navigation)
-- [x] Config file (`~/.config/tocker/config.toml` — `refresh_interval_ms`, `default_section`)
+- [x] Command history (`~/.local/share/rocker/history`, up/down navigation)
+- [x] Config file (`~/.config/rocker/config.toml` — `refresh_interval_ms`, `default_section`)
 - [x] Async Docker operations — UI never blocks; spinner shows in-flight commands
 - [x] Clipboard yank via OSC 52 (`yy` name, `yi` secondary, `yd` ID)
 
@@ -290,5 +290,5 @@ exec = "e"
 | ------------------- | ----------------------------------------------------------------------------------------------------- |
 | **Exec shell**      | `portable-pty` — proper PTY, cleaner UX                                                               |
 | **Remote daemons**  | `DOCKER_HOST` env var (Phase 1); config file `[remote]` block as fallback; env var always wins       |
-| **Config location** | XDG — `~/.config/tocker/config.toml`                                                                  |
+| **Config location** | XDG — `~/.config/rocker/config.toml`                                                                  |
 | **Compose groups**  | Opt-in for now; auto-detect `com.docker.compose.project` labels is a Phase 4 stretch goal             |

@@ -103,5 +103,5 @@ fn history_dir() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".local").join("share"))
                 .unwrap_or_else(|_| PathBuf::from("."))
         });
-    base.join("tocker")
+    base.join("rocker")
 }

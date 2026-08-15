@@ -31,18 +31,18 @@ jobs:
           - name: Linux x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: tocker-linux-x86_64
+            artifact: rocker-linux-x86_64
 
           - name: Linux i686
             os: ubuntu-latest
             target: i686-unknown-linux-gnu
-            artifact: tocker-linux-i686
+            artifact: rocker-linux-i686
             cross: true
 
           - name: macOS arm64
             os: macos-latest
             target: aarch64-apple-darwin
-            artifact: tocker-macos-aarch64
+            artifact: rocker-macos-aarch64
 
     steps:
       - uses: actions/checkout@v4
@@ -78,4 +78,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/tocker
+          path: target/${{ matrix.target }}/release/rocker

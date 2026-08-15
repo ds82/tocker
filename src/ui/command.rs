@@ -85,7 +85,7 @@ pub fn render_title(f: &mut Frame, area: Rect, app: &App) {
             .add_modifier(Modifier::BOLD),
     );
 
-    let right = Span::styled(" tocker ", Style::default().fg(Color::DarkGray));
+    let right = Span::styled(" rocker ", Style::default().fg(Color::DarkGray));
 
     let mut spans = vec![mode_label, section];
     if !app.filter.is_empty() {

@@ -1464,6 +1464,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "rocker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bollard",
+ "crossterm",
+ "futures",
+ "ratatui",
+ "serde",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1871,20 +1885,6 @@ checksum = "c8323304221c2a851516f22236c5722a72eaa19749016521d6dff0824447d96d"
 dependencies = [
  "displaydoc",
  "zerovec",
-]
-
-[[package]]
-name = "tocker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bollard",
- "crossterm",
- "futures",
- "ratatui",
- "serde",
- "tokio",
- "toml",
 ]
 
 [[package]]

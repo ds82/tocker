@@ -1,9 +1,9 @@
-# tocker
+# rocker
 
 A vim-inspired terminal UI for Docker, built with Rust and [Ratatui](https://github.com/ratatui-org/ratatui).
 
 ```
- [normal] containers                                          tocker
+ [normal] containers                                          rocker
  NAME              IMAGE              STATUS    PORTS
  nginx             nginx:latest       running   0.0.0.0:80->80/tcp
  postgres          postgres:15        exited    5432/tcp
@@ -24,8 +24,8 @@ A vim-inspired terminal UI for Docker, built with Rust and [Ratatui](https://git
 - Command history with up/down arrow navigation
 - Filter with `/` — substring match, clears on Esc
 - Remote Docker daemon via SSH (`DOCKER_HOST`)
-- Config file at `~/.config/tocker/config.toml`
-- Command history persisted at `~/.local/share/tocker/history`
+- Config file at `~/.config/rocker/config.toml`
+- Command history persisted at `~/.local/share/rocker/history`
 
 ## Install
 
@@ -39,11 +39,11 @@ Requires Rust 1.75+ and a running Docker daemon.
 
 ```sh
 # Local Docker socket
-tocker
+rocker
 
 # Remote host over SSH
-DOCKER_HOST=user@myserver tocker
-DOCKER_HOST=ssh://user@myserver:2222 tocker
+DOCKER_HOST=user@myserver rocker
+DOCKER_HOST=ssh://user@myserver:2222 rocker
 ```
 
 ## Keybindings
@@ -109,7 +109,7 @@ Built-in commands: `:q` / `:quit`.
 
 ## Config
 
-`~/.config/tocker/config.toml` (all fields optional):
+`~/.config/rocker/config.toml` (all fields optional):
 
 ```toml
 [general]
@@ -131,7 +131,7 @@ Priority order (first match wins):
 | `ssh://user@hostname:port` | SSH, explicit port |
 | `unix:///path/to/sock` | Custom local socket |
 
-SSH connections reuse `~/.ssh/config` and the system SSH agent — no credentials need to be configured in tocker.
+SSH connections reuse `~/.ssh/config` and the system SSH agent — no credentials need to be configured in rocker.
 
 ## Tech stack
 
